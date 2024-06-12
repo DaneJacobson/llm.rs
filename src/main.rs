@@ -177,7 +177,7 @@ struct ActivationTensors {
     preatt: Vec<f32>, // (L, B, NH, T, T)
     att: Vec<f32>, // (L, B, NH, T, T)
     attproj: Vec<f32>, // (L, B, T, C)
-    // residual2: Vec<f32>, // (L, B, T, C)
+    residual2: Vec<f32>, // (L, B, T, C)
     // ln2: Vec<f32>, // (L, B, T, C)
     // ln2_mean: Vec<f32>, // (L, B, T)
     // ln2_rstd: Vec<f32>, // (L, B, T)
@@ -205,7 +205,7 @@ impl ActivationTensors {
             preatt: vec![0f32; l*B*nh*T*T], 
             att: vec![0f32; l*B*nh*T*T], 
             attproj: vec![0f32; l*B*T*c], 
-            // residual2: vec![0f32; B*T*c], 
+            residual2: vec![0f32; l*B*T*c], 
             // ln2: vec![0f32; B*T*c], 
             // ln2_mean: vec![0f32; B*T*c],
             // ln2_rstd: vec![0f32; B*T*c],
@@ -281,20 +281,6 @@ impl GPT2 {
             }
         }
     }
-
-    // fn residual_fwd(
-    //     &mut self,
-    //     l: usize,
-    //     inp1: Vec<f32>,
-    //     inp2: Vec<f32>,
-    //     mut out: Vec<f32>,
-    // ) {
-    //     let c: usize = self.config.channels;
-    //     let skip: usize = l*(B*T*c);
-    //     for i in 0..(B*T*c) {
-    //         out[skip+i] = inp1[skip+i] + inp2[skip+i];
-    //     }
-    // }
 
     // fn gelu_fwd(
     //     &mut self,
@@ -398,7 +384,7 @@ impl GPT2 {
 
         // forward pass
         // let mut residual: Vec<f32> = Vec::new(); // (L * C)
-        self.encoder_forward(); // encoding goes into residual3[0]
+        self.encoder_forward(); // encoding goes into residual3[0] to bootstrap cycle
         for l in 0..nl {
             println!("Layer {} is running", l);
             // TODO: need to fix the residual stuff, it's a little confusing
@@ -409,7 +395,7 @@ impl GPT2 {
             matmul_fwd(l, c, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
             matmul_fwd(l, c, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
-            // self.residual_fwd(l, self.acts.residual3, self.acts.attproj, self.acts.residual2);
+            residual_fwd(l, c,&self.acts.residual3, &self.acts.attproj, &mut self.acts.residual2);
             // self.lyrnrm_fwd(l, self.acts.residual2, self.params.ln2w, self.params.ln2b, self.acts.ln2, self.acts.ln2_mean, self.acts.ln2_rstd);
             // // MLP
             // self.matmul_fwd(l, c, 4*c, self.acts.ln2, self.params.fcw, self.params.fcb, self.acts.fch);
@@ -789,5 +775,18 @@ fn attent_fwd(
                 }
             }
         }
+    }
+}
+
+fn residual_fwd(
+    l: usize,
+    c: usize,
+    inp1: &Vec<f32>,
+    inp2: &Vec<f32>,
+    out: &mut Vec<f32>,
+) {
+    let skip: usize = l*(B*T*c);
+    for i in 0..(B*T*c) {
+        out[skip+i] = inp1[skip+i] + inp2[skip+i];
     }
 }
