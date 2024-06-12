@@ -176,7 +176,7 @@ struct ActivationTensors {
     atty: Vec<f32>, // (L, B, T, C)
     preatt: Vec<f32>, // (L, B, NH, T, T)
     att: Vec<f32>, // (L, B, NH, T, T)
-    // attproj: Vec<f32>, // (L, B, T, C)
+    attproj: Vec<f32>, // (L, B, T, C)
     // residual2: Vec<f32>, // (L, B, T, C)
     // ln2: Vec<f32>, // (L, B, T, C)
     // ln2_mean: Vec<f32>, // (L, B, T)
@@ -204,7 +204,7 @@ impl ActivationTensors {
             atty: vec![0f32; l*B*T*c], 
             preatt: vec![0f32; l*B*nh*T*T], 
             att: vec![0f32; l*B*nh*T*T], 
-            // attproj: vec![0f32; B*T*c], 
+            attproj: vec![0f32; l*B*T*c], 
             // residual2: vec![0f32; B*T*c], 
             // ln2: vec![0f32; B*T*c], 
             // ln2_mean: vec![0f32; B*T*c],
@@ -408,7 +408,7 @@ impl GPT2 {
             lyrnrm_fwd(l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
             matmul_fwd(l, c, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
-            // self.matmul_fwd(l, c, c, self.acts.atty, self.params.attprojw, self.params.attprojb, self.acts.attproj);
+            matmul_fwd(l, c, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
             // self.residual_fwd(l, self.acts.residual3, self.acts.attproj, self.acts.residual2);
             // self.lyrnrm_fwd(l, self.acts.residual2, self.params.ln2w, self.params.ln2b, self.acts.ln2, self.acts.ln2_mean, self.acts.ln2_rstd);
             // // MLP
