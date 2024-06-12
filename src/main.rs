@@ -178,9 +178,9 @@ struct ActivationTensors {
     att: Vec<f32>, // (L, B, NH, T, T)
     attproj: Vec<f32>, // (L, B, T, C)
     residual2: Vec<f32>, // (L, B, T, C)
-    // ln2: Vec<f32>, // (L, B, T, C)
-    // ln2_mean: Vec<f32>, // (L, B, T)
-    // ln2_rstd: Vec<f32>, // (L, B, T)
+    ln2: Vec<f32>, // (L, B, T, C)
+    ln2_mean: Vec<f32>, // (L, B, T)
+    ln2_rstd: Vec<f32>, // (L, B, T)
     // fch: Vec<f32>, // (L, B, T, 4*C)
     // fch_gelu: Vec<f32>, // (L, B, T, 4*C)
     // fcproj: Vec<f32>, // (L, B, T, C)
@@ -198,17 +198,17 @@ impl ActivationTensors {
         return ActivationTensors {
             // encoded: vec![0f32; B*T*c],
             ln1: vec![0f32; l*B*T*c],
-            ln1_mean: vec![0f32; l*B*T*c],
-            ln1_rstd: vec![0f32; l*B*T*c],
+            ln1_mean: vec![0f32; l*B*T],
+            ln1_rstd: vec![0f32; l*B*T],
             qkv: vec![0f32; l*B*T*3*c], 
             atty: vec![0f32; l*B*T*c], 
             preatt: vec![0f32; l*B*nh*T*T], 
             att: vec![0f32; l*B*nh*T*T], 
             attproj: vec![0f32; l*B*T*c], 
             residual2: vec![0f32; l*B*T*c], 
-            // ln2: vec![0f32; B*T*c], 
-            // ln2_mean: vec![0f32; B*T*c],
-            // ln2_rstd: vec![0f32; B*T*c],
+            ln2: vec![0f32; l*B*T*c], 
+            ln2_mean: vec![0f32; l*B*T],
+            ln2_rstd: vec![0f32; l*B*T],
             // fch: vec![0f32; B*T*c], 
             // fch_gelu: vec![0f32; B*T*c], 
             // fcproj: vec![0f32; B*T*c], 
@@ -396,8 +396,8 @@ impl GPT2 {
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
             matmul_fwd(l, c, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
             residual_fwd(l, c,&self.acts.residual3, &self.acts.attproj, &mut self.acts.residual2);
-            // self.lyrnrm_fwd(l, self.acts.residual2, self.params.ln2w, self.params.ln2b, self.acts.ln2, self.acts.ln2_mean, self.acts.ln2_rstd);
-            // // MLP
+            lyrnrm_fwd(l, c, &self.acts.residual2, &self.params.ln2w, &self.params.ln2b, &mut self.acts.ln2, &mut self.acts.ln2_mean, &mut self.acts.ln2_rstd);
+            // MLP
             // self.matmul_fwd(l, c, 4*c, self.acts.ln2, self.params.fcw, self.params.fcb, self.acts.fch);
             // self.gelu_fwd(l, self.acts.fch, self.acts.fch_gelu);
             // self.matmul_fwd(l, 4*c, c, self.acts.fch_gelu, self.params.fcprojw, self.params.fcprojb, self.acts.fcproj);
@@ -580,8 +580,8 @@ fn lyrnrm_fwd(
     let eps: f32 = 1.0e-5;
     for b in 0..B {
         for t in 0..T {
-            let lb: usize = l*(B*T*c) + b*(T*c);
-            let lbt: usize = lb + t*(c);
+            // let lb: usize = l*(B*T*c) + b*(T*c);
+            let lbt: usize = l*(B*T*c) + b*(T*c) + t*(c);
 
             // calculate the mean
             let mut m: f32 = 0.0;
@@ -609,8 +609,8 @@ fn lyrnrm_fwd(
             }
 
             // cache the mean and rstd for the backward pass later
-            mean[lb + t] = m;
-            rstd[lb + t] = s;
+            mean[l*(B*T) + b*(T) + t] = m;
+            rstd[l*(B*T) + b*(T) + t] = s;
         }
     }
 }
