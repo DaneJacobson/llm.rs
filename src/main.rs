@@ -92,7 +92,7 @@ struct ParameterTensors {
     ln1w: Vec<f32>, // (L, C)
     ln1b: Vec<f32>, // (L, C)
     // attention
-    qkvw: Vec<f32>, // (L, 3*C, C)
+    qkvw: Vec<f32>, // (L, 3*C, C) -> takes C to 3*C
     qkvb: Vec<f32>, // (L, 3*C)
     attprojw: Vec<f32>, // (L, C, C)
     attprojb: Vec<f32>, // (L, C)
@@ -101,9 +101,9 @@ struct ParameterTensors {
     ln2b: Vec<f32>, // (L, C)
 
     // multi-layer perceptron
-    fcw: Vec<f32>, // (L, 4*C, C)
+    fcw: Vec<f32>, // (L, 4*C, C) -> takes C to 4*C
     fcb: Vec<f32>, // (L, 4*C)
-    fcprojw: Vec<f32>, // (L, C, 4*C)
+    fcprojw: Vec<f32>, // (L, C, 4*C) -> takes 4C to C
     fcprojb: Vec<f32>, // (L, C)
 
     // final linear
@@ -129,7 +129,7 @@ impl ParameterTensors {
             attprojb: utils::read_floats_into_vecf32(model_file, l * c, &String::from("attprojb")),
             ln2w: utils::read_floats_into_vecf32(model_file, l * c, &String::from("ln2w")),
             ln2b: utils::read_floats_into_vecf32(model_file, l * c, &String::from("ln2b")),
-            fcw: utils::read_floats_into_vecf32(model_file, l * 4*c, &String::from("fcw")),
+            fcw: utils::read_floats_into_vecf32(model_file, l * 4*c * c, &String::from("fcw")),
             fcb: utils::read_floats_into_vecf32(model_file, l * 4*c, &String::from("fcb")),
             fcprojw: utils::read_floats_into_vecf32(model_file, l * c * 4*c, &String::from("fcprojw")),
             fcprojb: utils::read_floats_into_vecf32(model_file, l * c, &String::from("fcprojb")),
@@ -181,9 +181,9 @@ struct ActivationTensors {
     ln2: Vec<f32>, // (L, B, T, C)
     ln2_mean: Vec<f32>, // (L, B, T)
     ln2_rstd: Vec<f32>, // (L, B, T)
-    // fch: Vec<f32>, // (L, B, T, 4*C)
-    // fch_gelu: Vec<f32>, // (L, B, T, 4*C)
-    // fcproj: Vec<f32>, // (L, B, T, C)
+    fch: Vec<f32>, // (L, B, T, 4*C)
+    fch_gelu: Vec<f32>, // (L, B, T, 4*C)
+    fcproj: Vec<f32>, // (L, B, T, C)
     residual3: Vec<f32>, // (L, B, T, C)
     // lnf: Vec<f32>, // (B, T, C)
     // lnf_mean: Vec<f32>, // (B, T)
@@ -209,9 +209,9 @@ impl ActivationTensors {
             ln2: vec![0f32; l*B*T*c], 
             ln2_mean: vec![0f32; l*B*T],
             ln2_rstd: vec![0f32; l*B*T],
-            // fch: vec![0f32; B*T*c], 
-            // fch_gelu: vec![0f32; B*T*c], 
-            // fcproj: vec![0f32; B*T*c], 
+            fch: vec![0f32; l*B*T*4*c], 
+            fch_gelu: vec![0f32; l*B*T*4*c], 
+            fcproj: vec![0f32; l*B*T*c], 
             residual3: vec![0f32; l*B*T*c], 
             // lnf: vec![0f32; B*T*c],
             // lnf_mean: vec![0f32; B*T*c],
@@ -281,24 +281,6 @@ impl GPT2 {
             }
         }
     }
-
-    // fn gelu_fwd(
-    //     &mut self,
-    //     l: usize,
-    //     fch: Vec<f32>,
-    //     mut fch_gelu: Vec<f32>,
-    // ) {
-    //     let c: usize = self.config.channels;
-    //     const M_PI: f32 = std::f32::consts::PI;
-    //     const GELU_SCALING_FACTOR: f32 = 2.0 / M_PI; // needs a square root
-    //     // (approximate) GeLU elementwise non-linearity in the MLP block of Transformer
-    //     let skip: usize = l*(B*T*4*c);
-    //     for i in 0..(B*T*4*c) {
-    //         let x: f32 = fch[skip+i];
-    //         let cube: f32 = 0.044715*x*x*x;
-    //         fch_gelu[skip+i] = 0.5 * x * (1.0 + (GELU_SCALING_FACTOR.sqrt() * (x+cube)).sqrt());
-    //     }
-    // }
 
     // pub fn softmax_fwd(
     //     &mut self,
@@ -392,16 +374,20 @@ impl GPT2 {
             // println!("{}", self.acts.ln1[0]);
             // println!("{}", self.acts.residual3.len());
             lyrnrm_fwd(l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
-            matmul_fwd(l, c, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
+            matmul_fwd(l, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
-            matmul_fwd(l, c, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
+            matmul_fwd(l, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
             residual_fwd(l, c,&self.acts.residual3, &self.acts.attproj, &mut self.acts.residual2);
             lyrnrm_fwd(l, c, &self.acts.residual2, &self.params.ln2w, &self.params.ln2b, &mut self.acts.ln2, &mut self.acts.ln2_mean, &mut self.acts.ln2_rstd);
             // MLP
-            // self.matmul_fwd(l, c, 4*c, self.acts.ln2, self.params.fcw, self.params.fcb, self.acts.fch);
-            // self.gelu_fwd(l, self.acts.fch, self.acts.fch_gelu);
-            // self.matmul_fwd(l, 4*c, c, self.acts.fch_gelu, self.params.fcprojw, self.params.fcprojb, self.acts.fcproj);
-            // self.residual_fwd(l, self.acts.residual2, self.acts.residual3, self.acts.fcproj);
+            println!("mlp matmul");
+            matmul_fwd(l, c, 4*c, &self.acts.ln2, &self.params.fcw, Some(&self.params.fcb), &mut self.acts.fch);
+            println!("gelu");
+            gelu_fwd(l, c, &self.acts.fch, &mut self.acts.fch_gelu);
+            println!("mlp matmul2");
+            matmul_fwd(l, 4*c, c, &self.acts.fch_gelu, &self.params.fcprojw, Some(&self.params.fcprojb), &mut self.acts.fcproj);
+            println!("mlp residual");
+            residual_fwd(l, c, &self.acts.residual2, &self.acts.residual3, &mut self.acts.fcproj);
         }
 
         // last residual is in residual3[-1]
@@ -617,7 +603,6 @@ fn lyrnrm_fwd(
 
 fn matmul_fwd_naive(
     l: usize,
-    c: usize,
     ic: usize,
     oc: usize,
     inp: &Vec<f32>,
@@ -627,20 +612,20 @@ fn matmul_fwd_naive(
 ) {
     // the most naive implementation of matrix multiplication
     // this serves as an algorithmic reference, and as a fallback for
-    // unfriendly input shapes inside matmul_forward(), below.
+    // unfriendly input shapes inside matmul_fwd(), below.
     for b in 0..B {
         for t in 0..T {
-            let lbt: usize = l*(B*T) + b*(T) + t;
             for o in 0..oc {
                 let mut val: f32 = match bias {
                     Some(bias_vec) => bias_vec[l*oc + o],
                     _ => 0.0,
                 };
-                for i in 0..ic { // TODO I think this is the only change required
-                    // val += inp[lbt*c + i] * weight[l*(oc*c) + o*c + i];
-                    val += inp[lbt*c + i] * weight[o*oc + i];
+                for i in 0..ic {
+                    let input_val: f32 = inp[l*(B*T*ic) + b*(T*ic) + t*(ic) + i];
+                    let weight_val: f32 = weight[l*(oc*ic) + o*(ic) + i];
+                    val += input_val * weight_val;
                 }
-                out[lbt*oc + o] = val;
+                out[l*(B*T*oc) + b*(T*oc) + t*(oc) + o] = val;
             }
         }
     }
@@ -648,7 +633,6 @@ fn matmul_fwd_naive(
 
 fn matmul_fwd(
     l: usize,
-    c: usize,
     ic: usize,
     oc: usize,
     inp: &Vec<f32>,
@@ -666,7 +650,7 @@ fn matmul_fwd(
     // make sure the tiled loop will be correct or fallback to naive version
     // const LOOP_UNROLL: usize = 8;
     // if B*T % LOOP_UNROLL != 0 {
-    matmul_fwd_naive(l, c, ic, oc, inp, weight, bias, out);
+    matmul_fwd_naive(l, ic, oc, inp, weight, bias, out);
     return;
     // }
 
@@ -788,5 +772,22 @@ fn residual_fwd(
     let skip: usize = l*(B*T*c);
     for i in 0..(B*T*c) {
         out[skip+i] = inp1[skip+i] + inp2[skip+i];
+    }
+}
+
+fn gelu_fwd(
+    l: usize,
+    c: usize,
+    fch: &Vec<f32>,
+    fch_gelu: &mut Vec<f32>,
+) {
+    const M_PI: f32 = std::f32::consts::PI;
+    const GELU_SCALING_FACTOR: f32 = 2.0 / M_PI; // needs a square root
+    // (approximate) GeLU elementwise non-linearity in the MLP block of Transformer
+    let skip: usize = l*(B*T*4*c);
+    for i in 0..(B*T*4*c) {
+        let x: f32 = fch[skip+i];
+        let cube: f32 = 0.044715*x*x*x;
+        fch_gelu[skip+i] = 0.5 * x * (1.0 + (GELU_SCALING_FACTOR.sqrt() * (x+cube)).sqrt());
     }
 }
