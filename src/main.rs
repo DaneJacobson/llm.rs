@@ -172,7 +172,7 @@ struct ActivationTensors {
     ln1: Vec<f32>, // (L, B, T, C)
     ln1_mean: Vec<f32>, // (L, B, T)
     ln1_rstd: Vec<f32>, // (L, B, T)
-    // qkv: Vec<f32>, // (L, B, T, 3*C)
+    qkv: Vec<f32>, // (L, B, T, 3*C)
     // atty: Vec<f32>, // (L, B, T, C)
     // preatt: Vec<f32>, // (L, B, NH, T, T)
     // att: Vec<f32>, // (L, B, NH, T, T)
@@ -200,7 +200,7 @@ impl ActivationTensors {
             ln1: vec![0f32; l*B*T*c],
             ln1_mean: vec![0f32; l*B*T*c],
             ln1_rstd: vec![0f32; l*B*T*c],
-            // qkv: vec![0f32; B*T*c], 
+            qkv: vec![0f32; l*B*T*3*c], 
             // atty: vec![0f32; B*T*c], 
             // preatt: vec![0f32; B*T*c], 
             // att: vec![0f32; B*T*c], 
@@ -281,92 +281,6 @@ impl GPT2 {
             }
         }
     }
-
-    // fn matmul_fwd_naive(
-    //     &mut self,
-    //     l: usize,
-    //     ic: usize,
-    //     oc: usize,
-    //     inp: Vec<f32>,
-    //     weight: Vec<f32>,
-    //     bias: &Option<Vec<f32>>,
-    //     mut out: Vec<f32>,
-    // ) {
-    //     // the most naive implementation of matrix multiplication
-    //     // this serves as an algorithmic reference, and as a fallback for
-    //     // unfriendly input shapes inside matmul_forward(), below.
-    //     // #pragma omp parallel for collapse(2)
-    //     let c: usize = self.config.channels;
-    //     for b in 0..B {
-    //         for t in 0..T {
-    //             let lbt: usize = l*(B*T) + b*(T) + t;
-    //             for o in 0..oc {
-    //                 let mut val: f32 = match bias {
-    //                     Some(bias_vec) => bias_vec[l*oc + o],
-    //                     _ => 0.0,
-    //                 };
-    //                 for i in 0..ic { // TODO I think this is the only change required
-    //                     // val += inp[lbt*c + i] * weight[l*(oc*c) + o*c + i];
-    //                     val += inp[lbt*c + i] * weight[o*oc + i];
-    //                 }
-    //                 out[lbt*oc + o] = val;
-    //             }
-    //         }
-    //     }
-    // }
-
-    // fn matmul_fwd(
-    //     &mut self,
-    //     l: usize,
-    //     ic: usize,
-    //     oc: usize,
-    //     out: Vec<f32>,
-    //     inp: Vec<f32>,
-    //     weight: Vec<f32>,
-    //     bias: &Option<Vec<f32>>,
-    // ) {
-    //     // most of the running time is spent here and in matmul_bwd
-    //     // therefore, the implementation below is very mildly optimized
-    //     // this function is otherwise identical to that of matmul_forward_naive()
-    //     // oc is short for "output channels"
-    //     // inp is (B,T,C), weight is (OC, C), bias is (OC)
-    //     // out will be (B,T,oc)
-
-    //     // make sure the tiled loop will be correct or fallback to naive version
-    //     // const LOOP_UNROLL: usize = 8;
-    //     // if B*T % LOOP_UNROLL != 0 {
-    //     self.matmul_fwd_naive(l, ic, oc, inp, weight, bias, out);
-    //     return;
-    //     // }
-
-    //     // collapse the B and T loops into one and turn it into a strided loop.
-    //     // then we can tile the inner loop, and reuse the loaded weight LOOP_UNROLL many times
-    //     // #pragma omp parallel for
-    //     // for obt in 0..B*T where obt += LOOP_UNROLL {
-    //     //     for o in 0..oc {
-    //     //         // we'll keep LOOP_UNROLL many results in registers
-    //     //         let mut result: Vec<f32> = Vec::new(LOOP_UNROLL);
-    //     //         // initialize the bias, if it exists
-    //     //         for ibt in 0..LOOP_UNROLL {
-    //     //             result[ibt] = (bias != None) ? bias[o] : 0.0;
-    //     //         }
-    //     //         // inner loops. Because we do LOOP_UNROLL steps of inner bt, we can cache
-    //     //         // the value of weight[i + o * C] and reuse it.
-    //     //         // we compile with -Ofast, so the compiler will turn the inner loop into FMAs
-    //     //         for i in 0..c {
-    //     //             float w = weight[i + o * C];
-    //     //             for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
-    //     //                 int bt = obt + ibt;
-    //     //                 result[ibt] += inp[bt * C + i] * w;
-    //     //             }
-    //     //         }
-    //     //         // write back results to main memory
-    //     //         for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
-    //     //             int bt = obt + ibt;
-    //     //             out[bt * OC + o] = result[ibt];
-    //     //         }
-    //     //     }
-    // }
 
     // fn attent_fwd(
     //     &mut self,
@@ -566,13 +480,14 @@ impl GPT2 {
         // let mut residual: Vec<f32> = Vec::new(); // (L * C)
         self.encoder_forward(); // encoding goes into residual3[0]
         for l in 0..nl {
+            println!("Layer {} is running", l);
             // TODO: need to fix the residual stuff, it's a little confusing
             // Multi-Head Attention
             // println!("{}", self.acts.ln1[0]);
             // println!("{}", self.acts.residual3.len());
             lyrnrm_fwd(l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
             // println!("{}", self.acts.ln1[0]);
-            // self.matmul_fwd(l, c, 3*c, self.acts.ln1, self.params.qkvw, self.params.qkvb, self.acts.qkv);
+            matmul_fwd(l, c, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
             // self.attent_fwd(l, self.acts.qkv, self.acts.preatt, self.acts.att, self.acts.atty);
             // self.matmul_fwd(l, c, c, self.acts.atty, self.params.attprojw, self.params.attprojb, self.acts.attproj);
             // self.residual_fwd(l, self.acts.residual3, self.acts.attproj, self.acts.residual2);
@@ -646,8 +561,9 @@ fn main() {
         if step % 10 == 0 {
             let mut _val_loss: f32 = 0.0;
             val_loader.reset();
-            for _ in 0..val_num_batches {
+            for val_batch in 0..val_num_batches {
                 val_loader.next_batch();
+                println!("Forward {} is running", val_batch);
                 model.forward();
                 _val_loss += model.mean_loss;
             }
@@ -788,4 +704,88 @@ fn lyrnrm_fwd(
             rstd[lb + t] = s;
         }
     }
+}
+
+fn matmul_fwd_naive(
+    l: usize,
+    c: usize,
+    ic: usize,
+    oc: usize,
+    inp: &Vec<f32>,
+    weight: &Vec<f32>,
+    bias: Option<&Vec<f32>>,
+    out: &mut Vec<f32>,
+) {
+    // the most naive implementation of matrix multiplication
+    // this serves as an algorithmic reference, and as a fallback for
+    // unfriendly input shapes inside matmul_forward(), below.
+    for b in 0..B {
+        for t in 0..T {
+            let lbt: usize = l*(B*T) + b*(T) + t;
+            for o in 0..oc {
+                let mut val: f32 = match bias {
+                    Some(bias_vec) => bias_vec[l*oc + o],
+                    _ => 0.0,
+                };
+                for i in 0..ic { // TODO I think this is the only change required
+                    // val += inp[lbt*c + i] * weight[l*(oc*c) + o*c + i];
+                    val += inp[lbt*c + i] * weight[o*oc + i];
+                }
+                out[lbt*oc + o] = val;
+            }
+        }
+    }
+}
+
+fn matmul_fwd(
+    l: usize,
+    c: usize,
+    ic: usize,
+    oc: usize,
+    inp: &Vec<f32>,
+    weight: &Vec<f32>,
+    bias: Option<&Vec<f32>>,
+    out: &mut Vec<f32>,
+) {
+    // most of the running time is spent here and in matmul_bwd
+    // therefore, the implementation below is very mildly optimized
+    // this function is otherwise identical to that of matmul_forward_naive()
+    // oc is short for "output channels"
+    // inp is (B,T,C), weight is (OC, C), bias is (OC)
+    // out will be (B,T,oc)
+
+    // make sure the tiled loop will be correct or fallback to naive version
+    // const LOOP_UNROLL: usize = 8;
+    // if B*T % LOOP_UNROLL != 0 {
+    matmul_fwd_naive(l, c, ic, oc, inp, weight, bias, out);
+    return;
+    // }
+
+    // collapse the B and T loops into one and turn it into a strided loop.
+    // then we can tile the inner loop, and reuse the loaded weight LOOP_UNROLL many times
+    // #pragma omp parallel for
+    // for obt in 0..B*T where obt += LOOP_UNROLL {
+    //     for o in 0..oc {
+    //         // we'll keep LOOP_UNROLL many results in registers
+    //         let mut result: Vec<f32> = Vec::new(LOOP_UNROLL);
+    //         // initialize the bias, if it exists
+    //         for ibt in 0..LOOP_UNROLL {
+    //             result[ibt] = (bias != None) ? bias[o] : 0.0;
+    //         }
+    //         // inner loops. Because we do LOOP_UNROLL steps of inner bt, we can cache
+    //         // the value of weight[i + o * C] and reuse it.
+    //         // we compile with -Ofast, so the compiler will turn the inner loop into FMAs
+    //         for i in 0..c {
+    //             float w = weight[i + o * C];
+    //             for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
+    //                 int bt = obt + ibt;
+    //                 result[ibt] += inp[bt * C + i] * w;
+    //             }
+    //         }
+    //         // write back results to main memory
+    //         for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
+    //             int bt = obt + ibt;
+    //             out[bt * OC + o] = result[ibt];
+    //         }
+    //     }
 }
