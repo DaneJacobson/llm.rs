@@ -173,9 +173,9 @@ struct ActivationTensors {
     ln1_mean: Vec<f32>, // (L, B, T)
     ln1_rstd: Vec<f32>, // (L, B, T)
     qkv: Vec<f32>, // (L, B, T, 3*C)
-    // atty: Vec<f32>, // (L, B, T, C)
-    // preatt: Vec<f32>, // (L, B, NH, T, T)
-    // att: Vec<f32>, // (L, B, NH, T, T)
+    atty: Vec<f32>, // (L, B, T, C)
+    preatt: Vec<f32>, // (L, B, NH, T, T)
+    att: Vec<f32>, // (L, B, NH, T, T)
     // attproj: Vec<f32>, // (L, B, T, C)
     // residual2: Vec<f32>, // (L, B, T, C)
     // ln2: Vec<f32>, // (L, B, T, C)
@@ -194,16 +194,16 @@ struct ActivationTensors {
 }
 
 impl ActivationTensors {
-    fn new(l: usize, c: usize) -> ActivationTensors {
+    fn new(l: usize, c: usize, nh: usize) -> ActivationTensors {
         return ActivationTensors {
             // encoded: vec![0f32; B*T*c],
             ln1: vec![0f32; l*B*T*c],
             ln1_mean: vec![0f32; l*B*T*c],
             ln1_rstd: vec![0f32; l*B*T*c],
             qkv: vec![0f32; l*B*T*3*c], 
-            // atty: vec![0f32; B*T*c], 
-            // preatt: vec![0f32; B*T*c], 
-            // att: vec![0f32; B*T*c], 
+            atty: vec![0f32; l*B*T*c], 
+            preatt: vec![0f32; l*B*nh*T*T], 
+            att: vec![0f32; l*B*nh*T*T], 
             // attproj: vec![0f32; B*T*c], 
             // residual2: vec![0f32; B*T*c], 
             // ln2: vec![0f32; B*T*c], 
@@ -235,7 +235,7 @@ struct GPT2 {
     // seq_len: u32, // the sequence length (T) of current forward pass
     inputs: Vec<usize>, // the input tokens for the current forward pass
     targets: Vec<usize>, // the target tokens for the current forward pass
-    mean_loss: f32, // after a forward pass with targets, will be populated with the mean loss
+    // mean_loss: f32, // after a forward pass with targets, will be populated with the mean loss
 }
 
 impl GPT2 {
@@ -244,7 +244,7 @@ impl GPT2 {
         let mut model_file: File = utils::fopen_check(checkpoint_path);
         let config: GPT2Config = GPT2Config::new(&mut model_file);
         let params: ParameterTensors = ParameterTensors::new(&mut model_file, &config);
-        let acts: ActivationTensors = ActivationTensors::new(config.num_layers, config.channels);
+        let acts: ActivationTensors = ActivationTensors::new(config.num_layers, config.channels, config.num_heads);
 
         return GPT2 {
             config: config,
@@ -258,7 +258,7 @@ impl GPT2 {
             // seq_len: 0,
             inputs: vec![0; B*T],
             targets: vec![0; B*T],
-            mean_loss: 0f32,
+            // mean_loss: 0f32,
         };
     }
 
@@ -281,86 +281,6 @@ impl GPT2 {
             }
         }
     }
-
-    // fn attent_fwd(
-    //     &mut self,
-    //     l: usize,
-    //     qkv: Vec<f32>,
-    //     mut preatt: Vec<f32>,
-    //     mut att: Vec<f32>,
-    //     mut atty: Vec<f32>,
-    // ) {
-    //     // qkv is (B, T, 3C) holding the query, key, value (Q, K, V) vectors
-    //     // preatt, att are (B, NH, T, T). NH = number of heads, T = sequence length
-    //     // that holds the pre-attention and post-attention scores (used in backward)
-    //     // output is (B, T, C)
-    //     // attention is the only layer that mixes information across time
-    //     // every other operation is applied at every (b,t) position independently
-    //     // (and of course, no layer mixes information across batch)
-    //     let c: usize = self.config.channels;
-    //     let c3: usize = 3*c;
-    //     let nh: usize = self.config.num_heads;
-    //     let hs: usize = c / nh; // head size
-    //     let scale: f32 = 1.0 / (hs as f32).sqrt();
-
-    //     for b in 0..B {
-    //         for t in 0..T {
-    //             for h in 0..nh {
-    //                 let query_t: usize = l*(B*T*c3) + b*(T*c3) + t*(c3) + h*hs;
-    //                 let preatt_bth: usize = l*(B*nh*T*T) + b*(nh*T*T) + h*(T*T) + t*T;
-    //                 let att_bth: usize = l*(B*nh*T*T) + b*nh*T*T + h*(T*T) + t*T;
-    
-    //                 // 1: calculate QK and maxval
-    //                 let mut maxval: f32 = -10000.0;
-    //                 for t2 in 0..t+1 {
-    //                     let key_t2: usize = l*(B*T*c3) + b*T*c3 + t2*c3 + h*hs + c; // +C because it's key
-    
-    //                     // (query_t) dot (key_t2)
-    //                     let mut val: f32 = 0.0;
-    //                     for i in 0..hs {
-    //                         val += qkv[query_t+i] * qkv[key_t2+i];
-    //                     }
-    //                     val *= scale;
-    //                     if val > maxval {maxval = val};
-    
-    //                     preatt[preatt_bth+t2] = val;
-    //                 }
-    
-    //                 // 2: calculate the exponentiation and keep track of sum
-    //                 // maxval is being calculated and subtracted only for numerical stability
-    //                 let mut expsum: f32 = 0.0;
-    //                 for t2 in 0..t+1 {
-    //                     let expv: f32 = (preatt[preatt_bth+t2] - maxval).exp();
-    //                     expsum += expv;
-    //                     att[att_bth+t2] = expv;
-    //                 }
-    //                 let expsum_inv: f32 = if expsum == 0.0 {0.0} else {1.0 / expsum};
-    
-    //                 // pass 3: normalize to get the softmax
-    //                 for t2 in 0..T {
-    //                     if t2 <= t {
-    //                         att[att_bth+t2] *= expsum_inv;
-    //                     } else {
-    //                         // causal attention mask. not strictly necessary to set to zero here
-    //                         // only doing this explicitly for debugging and checking to PyTorch
-    //                         att[att_bth+t2] = 0.0;
-    //                     }
-    //                 }
-    
-    //                 // pass 4: accumulate weighted values into the output of attention
-    //                 let atty_bth: usize = l*(B*T*c) + b*(T*c) + t*(c) + h*(hs);
-    //                 for i in 0..hs {atty[atty_bth+i] = 0.0}
-    //                 for t2 in 0..t+1 {
-    //                     let value_t2: usize = l*(B*T*c3) + b*(T*c3) + t2*(c3) + h*(hs) + c*2; // +C*2 because it's value
-    //                     let att_btht2: f32 = att[att_bth+t2];
-    //                     for i in 0..hs {
-    //                         atty[atty_bth+i] += att_btht2 * qkv[value_t2+i];
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
 
     // fn residual_fwd(
     //     &mut self,
@@ -462,7 +382,7 @@ impl GPT2 {
         let v = self.config.vocab_size;
         // let vp = self.config.padded_vocab_size;
         let nl = self.config.num_layers;
-        // let nh = self.config.num_heads;
+        let nh = self.config.num_heads;
         let c = self.config.channels;
 
         // validate inputs, all indices must be in the range [0, V)
@@ -486,9 +406,8 @@ impl GPT2 {
             // println!("{}", self.acts.ln1[0]);
             // println!("{}", self.acts.residual3.len());
             lyrnrm_fwd(l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
-            // println!("{}", self.acts.ln1[0]);
             matmul_fwd(l, c, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
-            // self.attent_fwd(l, self.acts.qkv, self.acts.preatt, self.acts.att, self.acts.atty);
+            attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
             // self.matmul_fwd(l, c, c, self.acts.atty, self.params.attprojw, self.params.attprojb, self.acts.attproj);
             // self.residual_fwd(l, self.acts.residual3, self.acts.attproj, self.acts.residual2);
             // self.lyrnrm_fwd(l, self.acts.residual2, self.params.ln2w, self.params.ln2b, self.acts.ln2, self.acts.ln2_mean, self.acts.ln2_rstd);
@@ -543,7 +462,7 @@ fn main() {
     let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
     println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
-    let val_num_batches: usize = 1; // TODO: This should be 5!
+    // let val_num_batches: usize = 1; // TODO: This should be 5!
 
     // build the Tokenizer
     let tokenizer_path: String = String::from("data/tokenizer/gpt2_tokenizer.bin");
@@ -556,19 +475,23 @@ fn main() {
 
     // train
     // let time_instant: Instant = Instant::now();
-    for step in 0..40 {
-        // once in a while estimate the validation loss
-        if step % 10 == 0 {
-            let mut _val_loss: f32 = 0.0;
-            val_loader.reset();
-            for val_batch in 0..val_num_batches {
-                val_loader.next_batch();
-                println!("Forward {} is running", val_batch);
-                model.forward();
-                _val_loss += model.mean_loss;
-            }
-        }
-    }
+    val_loader.next_batch();
+    // println!("Forward {} is running", val_batch);
+    model.forward();
+
+    // for step in 0..40 {
+    //     // once in a while estimate the validation loss
+    //     if step % 10 == 0 {
+    //         let mut _val_loss: f32 = 0.0;
+    //         val_loader.reset();
+    //         for val_batch in 0..val_num_batches {
+    //             val_loader.next_batch();
+    //             println!("Forward {} is running", val_batch);
+    //             model.forward();
+    //             _val_loss += model.mean_loss;
+    //         }
+    //     }
+    // }
 
     // for step in 0..41 {
     //     if step % 10 == 0 {
@@ -788,4 +711,83 @@ fn matmul_fwd(
     //             out[bt * OC + o] = result[ibt];
     //         }
     //     }
+}
+
+fn attent_fwd(
+    l: usize,
+    c: usize,
+    nh: usize,
+    qkv: &Vec<f32>,
+    preatt: &mut Vec<f32>,
+    att: &mut Vec<f32>,
+    atty: &mut Vec<f32>,
+) {
+    // qkv is (B, T, 3C) holding the query, key, value (Q, K, V) vectors
+    // preatt, att are (B, NH, T, T). NH = number of heads, T = sequence length
+    // that holds the pre-attention and post-attention scores (used in backward)
+    // output is (B, T, C)
+    // attention is the only layer that mixes information across time
+    // every other operation is applied at every (b,t) position independently
+    // (and of course, no layer mixes information across batch)
+    let c3: usize = 3*c;
+    let hs: usize = c / nh; // head size
+    let scale: f32 = 1.0 / (hs as f32).sqrt();
+
+    for b in 0..B {
+        for t in 0..T {
+            for h in 0..nh {
+                let query_t: usize = l*(B*T*c3) + b*(T*c3) + t*(c3) + h*hs;
+                let preatt_bth: usize = l*(B*nh*T*T) + b*(nh*T*T) + h*(T*T) + t*T;
+                let att_bth: usize = l*(B*nh*T*T) + b*nh*T*T + h*(T*T) + t*T;
+
+                // 1: calculate QK and maxval
+                let mut maxval: f32 = -10000.0;
+                for t2 in 0..t+1 {
+                    let key_t2: usize = l*(B*T*c3) + b*T*c3 + t2*c3 + h*hs + c; // +C because it's key
+
+                    // (query_t) dot (key_t2)
+                    let mut val: f32 = 0.0;
+                    for i in 0..hs {
+                        val += qkv[query_t+i] * qkv[key_t2+i];
+                    }
+                    val *= scale;
+                    if val > maxval {maxval = val};
+
+                    preatt[preatt_bth+t2] = val;
+                }
+
+                // 2: calculate the exponentiation and keep track of sum
+                // maxval is being calculated and subtracted only for numerical stability
+                let mut expsum: f32 = 0.0;
+                for t2 in 0..t+1 {
+                    let expv: f32 = (preatt[preatt_bth+t2] - maxval).exp();
+                    expsum += expv;
+                    att[att_bth+t2] = expv;
+                }
+                let expsum_inv: f32 = if expsum == 0.0 {0.0} else {1.0 / expsum};
+
+                // pass 3: normalize to get the softmax
+                for t2 in 0..T {
+                    if t2 <= t {
+                        att[att_bth+t2] *= expsum_inv;
+                    } else {
+                        // causal attention mask. not strictly necessary to set to zero here
+                        // only doing this explicitly for debugging and checking to PyTorch
+                        att[att_bth+t2] = 0.0;
+                    }
+                }
+
+                // pass 4: accumulate weighted values into the output of attention
+                let atty_bth: usize = l*(B*T*c) + b*(T*c) + t*(c) + h*(hs);
+                for i in 0..hs {atty[atty_bth+i] = 0.0}
+                for t2 in 0..t+1 {
+                    let value_t2: usize = l*(B*T*c3) + b*(T*c3) + t2*(c3) + h*(hs) + c*2; // +C*2 because it's value
+                    let att_btht2: f32 = att[att_bth+t2];
+                    for i in 0..hs {
+                        atty[atty_bth+i] += att_btht2 * qkv[value_t2+i];
+                    }
+                }
+            }
+        }
+    }
 }
