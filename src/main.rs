@@ -185,16 +185,21 @@ struct ActivationTensors {
     fch_gelu: Vec<f32>, // (L, B, T, 4*C)
     fcproj: Vec<f32>, // (L, B, T, C)
     residual3: Vec<f32>, // (L, B, T, C)
-    // lnf: Vec<f32>, // (B, T, C)
-    // lnf_mean: Vec<f32>, // (B, T)
-    // lnf_rstd: Vec<f32>, // (B, T)
-    // logits: Vec<f32>, // (B, T, V)
-    // probs: Vec<f32>, // (B, T, V)
-    // losses: Vec<f32>, // (B, T)
+    lnf: Vec<f32>, // (B, T, C)
+    lnf_mean: Vec<f32>, // (B, T)
+    lnf_rstd: Vec<f32>, // (B, T)
+    logits: Vec<f32>, // (B, T, Vp)
+    probs: Vec<f32>, // (B, T, Vp)
+    losses: Vec<f32>, // (B, T)
 }
 
 impl ActivationTensors {
-    fn new(l: usize, c: usize, nh: usize) -> ActivationTensors {
+    fn new(
+        l: usize, 
+        c: usize, 
+        nh: usize, 
+        vp: usize
+    ) -> ActivationTensors {
         return ActivationTensors {
             // encoded: vec![0f32; B*T*c],
             ln1: vec![0f32; l*B*T*c],
@@ -213,12 +218,12 @@ impl ActivationTensors {
             fch_gelu: vec![0f32; l*B*T*4*c], 
             fcproj: vec![0f32; l*B*T*c], 
             residual3: vec![0f32; l*B*T*c], 
-            // lnf: vec![0f32; B*T*c],
-            // lnf_mean: vec![0f32; B*T*c],
-            // lnf_rstd: vec![0f32; B*T*c],
-            // logits: vec![0f32; B*T*c],
-            // probs: vec![0f32; B*T*c],
-            // losses: vec![0f32; B*T*c],
+            lnf: vec![0f32; B*T*c],
+            lnf_mean: vec![0f32; B*T],
+            lnf_rstd: vec![0f32; B*T],
+            logits: vec![0f32; B*T*vp],
+            probs: vec![0f32; B*T*vp],
+            losses: vec![0f32; B*T],
         }
     }
 }
@@ -233,9 +238,9 @@ struct GPT2 {
     // grads_acts: Option<ActivationTensors>,
     // batch_size: u32, // the batch size (B) of current forward pass
     // seq_len: u32, // the sequence length (T) of current forward pass
-    inputs: Vec<usize>, // the input tokens for the current forward pass
-    targets: Vec<usize>, // the target tokens for the current forward pass
-    // mean_loss: f32, // after a forward pass with targets, will be populated with the mean loss
+    // inputs: &Vec<u32>, // the input tokens for the current forward pass
+    // targets: &Vec<u32>, // the target tokens for the current forward pass
+    mean_loss: f32, // after a forward pass with targets, will be populated with the mean loss
 }
 
 impl GPT2 {
@@ -244,7 +249,12 @@ impl GPT2 {
         let mut model_file: File = utils::fopen_check(checkpoint_path);
         let config: GPT2Config = GPT2Config::new(&mut model_file);
         let params: ParameterTensors = ParameterTensors::new(&mut model_file, &config);
-        let acts: ActivationTensors = ActivationTensors::new(config.num_layers, config.channels, config.num_heads);
+        let acts: ActivationTensors = ActivationTensors::new(
+            config.num_layers, 
+            config.channels, 
+            config.num_heads, 
+            config.padded_vocab_size
+        );
 
         return GPT2 {
             config: config,
@@ -256,13 +266,11 @@ impl GPT2 {
             // grads_acts: None,
             // batch_size: 0,
             // seq_len: 0,
-            inputs: vec![0; B*T],
-            targets: vec![0; B*T],
-            // mean_loss: 0f32,
+            mean_loss: 0f32,
         };
     }
 
-    fn encoder_forward(&mut self) {
+    fn encoder_forward(&mut self, inputs: Vec<u32>) {
         // out is (B,T,C). At each position (b,t), a C-dimensional vector summarizing token & position
         // inp is (B,T) of integers, holding the token ids at each (b,t) position
         // wte is (V,C) of token embeddings, short for "weight token embeddings"
@@ -271,7 +279,7 @@ impl GPT2 {
         let c = self.config.channels;
         for b in 0..B {
             for t in 0..T {
-                let idx = self.inputs[b*(T) + t] as usize;
+                let idx = inputs[b*(T) + t] as usize;
                 for i in 0..c {
                     let wte_val: f32 = self.params.wte[idx*c + i];
                     let wpe_val: f32 = self.params.wpe[t*c + i];
@@ -282,103 +290,41 @@ impl GPT2 {
         }
     }
 
-    // pub fn softmax_fwd(
-    //     &mut self,
-    //     v: usize,
-    //     vp: usize,
-    //     mut probs: Vec<f32>,
-    //     logits: Vec<f32>,
-    // ) {
-    //     // output: probs are (B,T,Vp) of the probabilities (sums to 1.0 in each b,t position)
-    //     // input: logits is (B,T,Vp) of the unnormalized log probabilities
-    //     // Vp is the padded vocab size (for efficiency), V is the "real" vocab size
-    //     // example: Vp is 50304 and V is 50257
-    //     // #pragma omp parallel for collapse(2)
-    //     for b in 0..B {
-    //         for t in 0..T {
-    //             // probs <- softmax(logits)
-    //             let logits_bt: usize = b*(T*vp) + t*(vp);
-    //             let probs_bt: usize = b*(T*vp) + t*(vp);
-
-    //             // maxval is only calculated and subtracted for numerical stability
-    //             let mut maxval: f32 = -10000.0; // TODO something better
-    //             for i in 0..v {
-    //                 if logits[logits_bt+i] > maxval {
-    //                     maxval = logits[logits_bt+i];
-    //                 }
-    //             }
-    //             let mut sum: f32 = 0.0;
-    //             for i in 0..v {
-    //                 probs[probs_bt+i] = (probs[probs_bt+i] - maxval).exp();
-    //                 sum += probs[probs_bt+i];
-    //             }
-    //             // note we only loop to V, leaving the padded dimensions
-    //             for i in 0..v {
-    //                 probs[probs_bt+i] /= sum;
-    //             }
-    //             // for extra super safety we may wish to include this too,
-    //             // forcing the probabilities here to be zero, but it shouldn't matter
-    //             for i in 0..vp {
-    //                 probs[probs_bt+i] = 0.0;
-    //             }
-    //         }
-    //     }
-    // }
-
-    // fn crossentropy_fwd(
-    //     &mut self,
-    //     vp: usize,
-    //     mut losses: Vec<f32>,
-    //     probs: Vec<f32>,
-    //     targets: Vec<usize>,
-    // ) {
-    //     // output: losses is (B,T) of the individual losses at each position
-    //     // input: probs are (B,T,Vp) of the probabilities
-    //     // input: targets is (B,T) of integers giving the correct index in logits
-    //     for b in 0..B {
-    //         for t in 0..T {
-    //             // loss = -log(probs[target])
-    //             let probs_bt: usize = b*(T*vp) + t*(vp);
-    //             let ix: usize = targets[b*(T) + t];
-    //             losses[b*(T) + t] = -1.0 * (probs[probs_bt+ix]).ln();
-    //         }
-    //     }
-    // }
-
-    pub fn forward(&mut self) {
+    pub fn forward(&mut self, is_train: bool, inputs: Vec<u32>, targets: Vec<u32>) {
         // convenience parameters (size_t to help prevent int overflow)
         let v = self.config.vocab_size;
-        // let vp = self.config.padded_vocab_size;
+        let vp = self.config.padded_vocab_size;
         let nl = self.config.num_layers;
         let nh = self.config.num_heads;
         let c = self.config.channels;
 
         // validate inputs, all indices must be in the range [0, V)
         for i in 0..B*T {
-            // assert!(0 <= self.inputs[i]);
-            assert!(self.inputs[i] < v);
-            // assert!(0 <= self.targets[i]);
-            assert!(self.targets[i] < v);
+            // assert!(0 <= inputs[i]);
+            assert!(inputs[i] < v as u32);
+            // assert!(0 <= targets[i]);
+            assert!(targets[i] < v as u32);
         }
 
-        // let acts: &mut ActivationTensors = &mut self.acts;
-        // let prms: &ParameterTensors = &self.params;
-
         // forward pass
-        // let mut residual: Vec<f32> = Vec::new(); // (L * C)
-        self.encoder_forward(); // encoding goes into residual3[0] to bootstrap cycle
+        println!("Encoder firing");
+        self.encoder_forward(inputs); // encoding goes into residual3[0] to bootstrap cycle
         for l in 0..nl {
             println!("Layer {} is running", l);
             // TODO: need to fix the residual stuff, it's a little confusing
             // Multi-Head Attention
-            // println!("{}", self.acts.ln1[0]);
-            // println!("{}", self.acts.residual3.len());
-            lyrnrm_fwd(l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
+            println!("lyrnrm1");
+            lyrnrm_fwd(l, l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
+            println!("matmul1");
             matmul_fwd(l, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
+            println!("attent");
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
+            println!("matmul2");
             matmul_fwd(l, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
+            println!("residual");
             residual_fwd(l, c,&self.acts.residual3, &self.acts.attproj, &mut self.acts.residual2);
-            lyrnrm_fwd(l, c, &self.acts.residual2, &self.params.ln2w, &self.params.ln2b, &mut self.acts.ln2, &mut self.acts.ln2_mean, &mut self.acts.ln2_rstd);
+            println!("lyrnrm2");
+            lyrnrm_fwd(l, l, c, &self.acts.residual2, &self.params.ln2w, &self.params.ln2b, &mut self.acts.ln2, &mut self.acts.ln2_mean, &mut self.acts.ln2_rstd);
             // MLP
             println!("mlp matmul");
             matmul_fwd(l, c, 4*c, &self.acts.ln2, &self.params.fcw, Some(&self.params.fcb), &mut self.acts.fch);
@@ -388,25 +334,31 @@ impl GPT2 {
             matmul_fwd(l, 4*c, c, &self.acts.fch_gelu, &self.params.fcprojw, Some(&self.params.fcprojb), &mut self.acts.fcproj);
             println!("mlp residual");
             residual_fwd(l, c, &self.acts.residual2, &self.acts.residual3, &mut self.acts.fcproj);
+            println!("Layer {} is done", l);
         }
 
         // last residual is in residual3[-1]
-        // self.lyrnrm_fwd(nl-1, self.acts.residual3, self.params.lnfw, self.params.lnfb, self.acts.lnf, self.acts.lnf_mean, self.acts.lnf_rstd,);
-        // self.matmul_fwd(nl-1, c, vp, self.acts.logits, self.acts.lnf, self.params.wte, None);
-        // self.softmax_fwd(v, vp, self.acts.probs, self.acts.logits);
+        println!("Last layernorm firing");
+        lyrnrm_fwd(nl-1, 0, c, &self.acts.residual3, &self.params.lnfw, &self.params.lnfb, &mut self.acts.lnf, &mut self.acts.lnf_mean, &mut self.acts.lnf_rstd,);
+        println!("Last matmul fwd naive firing");
+        matmul_fwd( 0, c, vp, &self.acts.lnf, &self.params.wte, None, &mut self.acts.logits);
+        println!("Softmax firing");
+        softmax_fwd(v, vp, &self.acts.logits, &mut self.acts.probs);
 
-        // // also forward the cross-entropy loss function if we have the targets
-        // if self.targets != None {
-        //     self.crossentropy_fwd(vp, self.acts.losses, self.acts.probs, self.targets);
-        //     // for convenience also evaluate the mean loss
-        //     self.mean_loss = 0.0;
-        //     for i in 0..B*T {self.mean_loss += self.acts.losses[i]}
-        //     for i in 0..B*T {self.mean_loss += self.acts.losses[i]};
-        //     self.mean_loss /= B*T as f32;
-        // } else {
-        //     // if we don't have targets, we don't have a loss
-        //     self.mean_loss = -1.0;
-        // }
+        // also forward the cross-entropy loss function if we have the targets
+        if is_train {
+            println!("crossentropy firing");
+            crossentropy_fwd(vp, &self.acts.probs, targets, &mut self.acts.losses);
+            // for convenience also evaluate the mean loss
+            self.mean_loss = 0.0;
+            for i in 0..B*T {self.mean_loss += self.acts.losses[i]};
+            for i in 0..B*T {self.mean_loss += self.acts.losses[i]};
+            self.mean_loss /= (B*T) as f32;
+        } else {
+            println!("no trainig");
+            // if we don't have targets, we don't have a loss
+            self.mean_loss = -1.0;
+        }
     }
 }
 
@@ -434,7 +386,7 @@ fn main() {
     let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
     println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
-    // let val_num_batches: usize = 1; // TODO: This should be 5!
+    let val_num_batches: usize = 5;
 
     // build the Tokenizer
     let tokenizer_path: String = String::from("data/tokenizer/gpt2_tokenizer.bin");
@@ -447,23 +399,20 @@ fn main() {
 
     // train
     // let time_instant: Instant = Instant::now();
-    val_loader.next_batch();
-    // println!("Forward {} is running", val_batch);
-    model.forward();
 
-    // for step in 0..40 {
-    //     // once in a while estimate the validation loss
-    //     if step % 10 == 0 {
-    //         let mut _val_loss: f32 = 0.0;
-    //         val_loader.reset();
-    //         for val_batch in 0..val_num_batches {
-    //             val_loader.next_batch();
-    //             println!("Forward {} is running", val_batch);
-    //             model.forward();
-    //             _val_loss += model.mean_loss;
-    //         }
-    //     }
-    // }
+    for step in 0..40 {
+        // once in a while estimate the validation loss
+        if step % 10 == 0 {
+            let mut _val_loss: f32 = 0.0;
+            val_loader.reset();
+            for val_batch in 0..val_num_batches {
+                let (inputs, targets) = val_loader.next_batch();
+                println!("Forward {} is running", val_batch);
+                model.forward(true, inputs, targets);
+                _val_loss += model.mean_loss;
+            }
+        }
+    }
 
     // for step in 0..41 {
     //     if step % 10 == 0 {
@@ -528,13 +477,9 @@ fn main() {
         // println!("step %d: train loss %f (took %f ms)\n", step, model.mean_loss, time_elapsed_s * 1000);
 }
 
-
-
-
-
-
 fn lyrnrm_fwd(
-    l: usize,
+    il: usize,
+    ol: usize,
     c: usize,
     inp: &Vec<f32>,
     weight: &Vec<f32>,
@@ -548,38 +493,24 @@ fn lyrnrm_fwd(
     // mean and rstd are (B,T) buffers, to be used later in backward pass
     // at each position (b,t) of the input, the C-dimensional vector
     // of activations gets normalized, then scaled and shifted
-    // let c: usize = self.config.channels;
-    // println!("\n");
-    // println!("LBTC: {}", 12*4*64*768);
-    // println!("inp: {}", inp.len());
-    // println!("LC: {}", 12*768);
-    // println!("weight: {}", weight.len());
-    // println!("LC: {}", 12*768);
-    // println!("bias: {}", bias.len());
-    // println!("LBTC: {}", 12*4*64*768);
-    // println!("out: {}", out.len());
-    // println!("LBT: {}", 12*4*64*768);
-    // println!("mean: {}", mean.len());
-    // println!("LBT: {}", 12*4*64*768);
-    // println!("rstd: {}", rstd.len());
 
     let eps: f32 = 1.0e-5;
     for b in 0..B {
         for t in 0..T {
             // let lb: usize = l*(B*T*c) + b*(T*c);
-            let lbt: usize = l*(B*T*c) + b*(T*c) + t*(c);
+            let ilbt: usize = il*(B*T*c) + b*(T*c) + t*(c);
 
             // calculate the mean
             let mut m: f32 = 0.0;
             for i in 0..c {
-                m += inp[lbt+i];
+                m += inp[ilbt+i];
             }
             m = m / c as f32;
 
             // calculate the variance (without any bias correction)
             let mut v: f32 = 0.0;
             for i in 0..c {
-                let xshift: f32 = inp[lbt+i] - m;
+                let xshift: f32 = inp[ilbt+i] - m;
                 v += xshift * xshift;
             }
             v = v/c as f32;
@@ -589,14 +520,14 @@ fn lyrnrm_fwd(
 
             // perform calculations
             for i in 0..c {
-                let n: f32 = s * (inp[lbt+i] - m); // normalize
-                let o: f32 = n * weight[l*(c) + i] + bias[l*(c) + i]; // scale and shift
-                out[lbt+i] = o; // write
+                let n: f32 = s * (inp[ilbt+i] - m); // normalize
+                let o: f32 = n * weight[ol*(c) + i] + bias[ol*(c) + i]; // scale and shift
+                out[ol*(B*T*c) + b*(T*c) + t*(c) + i] = o; // write
             }
 
             // cache the mean and rstd for the backward pass later
-            mean[l*(B*T) + b*(T) + t] = m;
-            rstd[l*(B*T) + b*(T) + t] = s;
+            mean[ol*(B*T) + b*(T) + t] = m;
+            rstd[ol*(B*T) + b*(T) + t] = s;
         }
     }
 }
@@ -615,6 +546,7 @@ fn matmul_fwd_naive(
     // unfriendly input shapes inside matmul_fwd(), below.
     for b in 0..B {
         for t in 0..T {
+            // println!("Running {} out of {}", b*T + t, B*T);
             for o in 0..oc {
                 let mut val: f32 = match bias {
                     Some(bias_vec) => bias_vec[l*oc + o],
@@ -789,5 +721,66 @@ fn gelu_fwd(
         let x: f32 = fch[skip+i];
         let cube: f32 = 0.044715*x*x*x;
         fch_gelu[skip+i] = 0.5 * x * (1.0 + (GELU_SCALING_FACTOR.sqrt() * (x+cube)).sqrt());
+    }
+}
+
+fn softmax_fwd(
+    v: usize,
+    vp: usize,
+    logits: &Vec<f32>,
+    probs: &mut Vec<f32>,
+) {
+    // output: probs are (B,T,Vp) of the probabilities (sums to 1.0 in each b,t position)
+    // input: logits is (B,T,Vp) of the unnormalized log probabilities
+    // Vp is the padded vocab size (for efficiency), V is the "real" vocab size
+    // example: Vp is 50304 and V is 50257
+    // #pragma omp parallel for collapse(2)
+    for b in 0..B {
+        for t in 0..T {
+            // probs <- softmax(logits)
+            let logits_bt: usize = b*(T*vp) + t*(vp);
+            let probs_bt: usize = b*(T*vp) + t*(vp);
+
+            // maxval is only calculated and subtracted for numerical stability
+            let mut maxval: f32 = -10000.0; // TODO something better
+            for i in 0..v {
+                if logits[logits_bt+i] > maxval {
+                    maxval = logits[logits_bt+i];
+                }
+            }
+            let mut sum: f32 = 0.0;
+            for i in 0..v {
+                probs[probs_bt+i] = (probs[probs_bt+i] - maxval).exp();
+                sum += probs[probs_bt+i];
+            }
+            // note we only loop to V, leaving the padded dimensions
+            for i in 0..v {
+                probs[probs_bt+i] /= sum;
+            }
+            // for extra super safety we may wish to include this too,
+            // forcing the probabilities here to be zero, but it shouldn't matter
+            for i in 0..vp {
+                probs[probs_bt+i] = 0.0;
+            }
+        }
+    }
+}
+
+fn crossentropy_fwd(
+    vp: usize,
+    probs: &Vec<f32>,
+    targets: Vec<u32>,
+    losses: &mut Vec<f32>,
+) {
+    // output: losses is (B,T) of the individual losses at each position
+    // input: probs are (B,T,Vp) of the probabilities
+    // input: targets is (B,T) of integers giving the correct index in logits
+    for b in 0..B {
+        for t in 0..T {
+            // loss = -log(probs[target])
+            let probs_bt: usize = b*(T*vp) + t*(vp);
+            let ix: usize = targets[b*(T) + t] as usize;
+            losses[b*(T) + t] = -1.0 * (probs[probs_bt+ix]).ln();
+        }
     }
 }

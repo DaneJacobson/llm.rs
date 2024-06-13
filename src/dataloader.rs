@@ -129,9 +129,9 @@ impl DataLoader {
     }
 
     // Load the next set of inputs/targets
-    pub fn next_batch(&mut self) {
-        let b = B;
-        let t = T;
+    pub fn next_batch(&mut self) -> (Vec<u32>, Vec<u32>) {
+        let mut inputs: Vec<u32> = vec![0u32; B*T];
+        let mut targets: Vec<u32> = vec![0u32; B*T];
 
         // read B*T+1 u16 tokens from the file into buffer
         let file = utils::fopen_check(&self.gl_pathv[self.current_shard]);
@@ -149,20 +149,22 @@ impl DataLoader {
         
         // decode the buffer into inputs and targets (cast to int)
         println!("{}", self.inputs.len());
-        for i in 0..b*t {
-            self.inputs[i] = self.buffer[i] as u32;
-            self.targets[i] = self.buffer[i + 1] as u32;
+        for i in 0..B*T {
+            inputs[i] = self.buffer[i] as u32;
+            targets[i] = self.buffer[i + 1] as u32;
         }
 
         // advance the current position by B*T*n_proc integers
         // note: the "stride" of tokens by which we move each time is definitely B * T
         // we only load B * T + 1 tokens at each iteration because the targets are offset by 1
-        self.current_position += ((self.n_proc*b*t)*16) as u64;
+        self.current_position += ((self.n_proc*B*T)*16) as u64;
         // if the next batch would go past the end of the file, advance the loader
         let file_size = file.metadata().unwrap().len();
-        if self.current_position + ((self.n_proc*b*t+1)*16) as u64 > file_size {
+        if self.current_position + ((self.n_proc*B*T+1)*16) as u64 > file_size {
             self.advance();
         }
+
+        return (inputs, targets);
     }
 
 }
