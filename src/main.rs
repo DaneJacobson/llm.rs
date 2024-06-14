@@ -137,6 +137,32 @@ impl ParameterTensors {
             lnfb: utils::read_floats_into_vecf32(model_file, c, &String::from("lnfb")),
         }
     }
+
+    pub fn new_empty(config: &GPT2Config) -> ParameterTensors {
+        let vp: usize = config.padded_vocab_size;
+        let c: usize = config.channels;
+        let maxt: usize = config.max_seq_len;
+        let l: usize = config.num_layers;
+
+        return ParameterTensors {
+            wte: vec![0f32; vp*c], // (V, C)
+            wpe: vec![0f32; maxt*c], // (maxT, C)
+            ln1w: vec![0f32; l*c], // (L, C)
+            ln1b: vec![0f32; l*c], // (L, C)
+            qkvw: vec![0f32; l*3*c*c], // (L, 3*C, C) -> takes C to 3*C
+            qkvb: vec![0f32; l*3*c], // (L, 3*C)
+            attprojw: vec![0f32; l*c*c], // (L, C, C)
+            attprojb: vec![0f32; l*c], // (L, C)
+            ln2w: vec![0f32; l*c], // (L, C)
+            ln2b: vec![0f32; l*c], // (L, C)
+            fcw: vec![0f32; l*4*c*c], // (L, 4*C, C) -> takes C to 4*C
+            fcb: vec![0f32; l*4*c], // (L, 4*C)
+            fcprojw: vec![0f32; l*c*4*c], // (L, C, 4*C) -> takes 4C to C
+            fcprojb: vec![0f32; l*c], // (L, C)
+            lnfw: vec![0f32; c], // (C)
+            lnfb: vec![0f32; c], // (C)
+        }
+    }
 }
 
 impl fmt::Display for ParameterTensors {
@@ -194,12 +220,12 @@ struct ActivationTensors {
 }
 
 impl ActivationTensors {
-    fn new(
-        l: usize, 
-        c: usize, 
-        nh: usize, 
-        vp: usize
-    ) -> ActivationTensors {
+    fn new(config: &GPT2Config) -> ActivationTensors {
+        let l: usize = config.num_layers; 
+        let c: usize = config.channels; 
+        let nh: usize = config.num_heads;
+        let vp: usize = config.padded_vocab_size;
+        
         return ActivationTensors {
             // encoded: vec![0f32; B*T*c],
             ln1: vec![0f32; l*B*T*c],
@@ -231,11 +257,11 @@ impl ActivationTensors {
 struct GPT2 {
     config: GPT2Config,
     params: ParameterTensors,
-    // grads: Option<ParameterTensors>,
+    acts: ActivationTensors,
+    grads: ParameterTensors,
+    grads_acts: ActivationTensors,
     // m_memory: Option<Vec<f32>>,
     // v_memory: Option<Vec<f32>>,
-    acts: ActivationTensors,
-    // grads_acts: Option<ActivationTensors>,
     // batch_size: u32, // the batch size (B) of current forward pass
     // seq_len: u32, // the sequence length (T) of current forward pass
     // inputs: &Vec<u32>, // the input tokens for the current forward pass
@@ -249,28 +275,26 @@ impl GPT2 {
         let mut model_file: File = utils::fopen_check(checkpoint_path);
         let config: GPT2Config = GPT2Config::new(&mut model_file);
         let params: ParameterTensors = ParameterTensors::new(&mut model_file, &config);
-        let acts: ActivationTensors = ActivationTensors::new(
-            config.num_layers, 
-            config.channels, 
-            config.num_heads, 
-            config.padded_vocab_size
-        );
+        let acts: ActivationTensors = ActivationTensors::new(&config);
+        let grads: ParameterTensors = ParameterTensors::new_empty(&config);
+        let grads_acts: ActivationTensors = ActivationTensors::new(&config);
 
         return GPT2 {
             config: config,
             params: params,
-            // grads: None,
+            grads: grads,
+            grads_acts: grads_acts,
             // m_memory: None,
             // v_memory: None,
             acts: acts,
-            // grads_acts: None,
             // batch_size: 0,
             // seq_len: 0,
-            mean_loss: 0f32,
+            // inputs: &mut vec![0u32; B*T],
+            mean_loss: -1.0f32,
         };
     }
 
-    fn encoder_forward(&mut self, inputs: Vec<u32>) {
+    fn encoder_forward(&mut self, inputs: &Vec<u32>) {
         // out is (B,T,C). At each position (b,t), a C-dimensional vector summarizing token & position
         // inp is (B,T) of integers, holding the token ids at each (b,t) position
         // wte is (V,C) of token embeddings, short for "weight token embeddings"
@@ -290,7 +314,7 @@ impl GPT2 {
         }
     }
 
-    pub fn forward(&mut self, is_train: bool, inputs: Vec<u32>, targets: Vec<u32>) {
+    pub fn forward(&mut self, is_train: bool, inputs: &Vec<u32>, targets: &Vec<u32>) {
         // convenience parameters (size_t to help prevent int overflow)
         let v = self.config.vocab_size;
         let vp = self.config.padded_vocab_size;
@@ -308,7 +332,7 @@ impl GPT2 {
 
         // forward pass
         println!("Encoder firing");
-        self.encoder_forward(inputs); // encoding goes into residual3[0] to bootstrap cycle
+        self.encoder_forward(&inputs); // encoding goes into residual3[0] to bootstrap cycle
         for l in 0..nl {
             println!("Layer {} is running", l);
             // TODO: need to fix the residual stuff, it's a little confusing
@@ -348,7 +372,7 @@ impl GPT2 {
         // also forward the cross-entropy loss function if we have the targets
         if is_train {
             println!("crossentropy firing");
-            crossentropy_fwd(vp, &self.acts.probs, targets, &mut self.acts.losses);
+            crossentropy_fwd(vp, &self.acts.probs, &targets, &mut self.acts.losses);
             // for convenience also evaluate the mean loss
             self.mean_loss = 0.0;
             for i in 0..B*T {self.mean_loss += self.acts.losses[i]};
@@ -359,6 +383,118 @@ impl GPT2 {
             // if we don't have targets, we don't have a loss
             self.mean_loss = -1.0;
         }
+    }
+
+    // pub fn zero_grad(&mut self) {
+
+
+    //     if(model->grads_memory != NULL) { memset(model->grads_memory, 0, model->num_parameters * sizeof(float)); }
+    //     if(model->grads_acts_memory != NULL) { memset(model->grads_acts_memory, 0, model->num_activations * sizeof(float)); }
+    // }
+
+    pub fn backward(&mut self, inputs: &Vec<u32>, targets: &Vec<u32>) {
+        println!("backward pass runs");
+        // double check we forwarded previously, with targets
+        // if self.mean_loss == -1.0 {
+        //     println!("Error: must forward with targets before backward\n");
+        //     exit(1);
+        // }
+
+        // convenience shortcuts (and size_t to help prevent int overflow)
+        // size_t B = model->batch_size;
+        // size_t T = model->seq_len;
+        let v: usize = self.config.vocab_size;
+        let vp: usize = self.config.padded_vocab_size;
+        let nl: usize = self.config.num_layers;
+        // size_t NH = model->config.num_heads;
+        let c: usize = self.config.channels;
+
+        // backward pass: go in the reverse order of the forward pass, and call backward() functions
+        // ParameterTensors params = model->params; // for brevity
+        // ParameterTensors grads = model->grads;
+        // ActivationTensors acts = model->acts;
+        // ActivationTensors grads_acts = model->grads_acts;
+
+        // we kick off the chain rule by filling in dlosses with 1.0f/(B*T)
+        // technically this is a small, inline backward() pass of calculating
+        // total, final loss as the mean over all losses over all (B,T) positions in the batch
+        let dloss_mean: f32 = 1.0 / (B*T) as f32;
+        for i in 0..B*T {self.grads_acts.losses[i] = dloss_mean}
+
+        println!("backwards crossentropy firing");
+        crossentropy_softmax_backward(v, vp, &targets, &self.grads_acts.losses, &self.acts.probs,&mut self.grads_acts.logits);
+        println!("backwards matmul firing");
+        matmul_backward(0, vp, c, &self.grads_acts.logits, &self.params.wte, &self.acts.lnf, &mut self.grads_acts.lnf, &mut self.grads.wte, None);
+        // float* residual = acts.residual3 + (L-1) * B * T * C; // last layer's residual
+        // float* dresidual = grads_acts.residual3 + (L-1) * B * T * C; // write to last layer's residual
+        // layernorm_backward(dresidual, grads.lnfw, grads.lnfb, grads_acts.lnf, residual, params.lnfw, acts.lnf_mean, acts.lnf_rstd, B, T, C);
+
+        // for l in (0..nl).rev() {
+
+        //     residual = l == 0 ? acts.encoded : acts.residual3 + (l-1) * B * T * C;
+        //     dresidual = l == 0 ? grads_acts.encoded : grads_acts.residual3 + (l-1) * B * T * C;
+    
+        //     // get the pointers of the weights for this layer
+        //     float* l_ln1w = params.ln1w + l * C;
+        //     float* l_qkvw = params.qkvw + l * 3*C * C;
+        //     float* l_attprojw = params.attprojw + l * C * C;
+        //     float* l_ln2w = params.ln2w + l * C;
+        //     float* l_fcw = params.fcw + l * 4*C * C;
+        //     float* l_fcprojw = params.fcprojw + l * C * 4*C;
+        //     // get the pointers of the gradients of the weights for this layer
+        //     float* dl_ln1w = grads.ln1w + l * C;
+        //     float* dl_ln1b = grads.ln1b + l * C;
+        //     float* dl_qkvw = grads.qkvw + l * 3*C * C;
+        //     float* dl_qkvb = grads.qkvb + l * 3*C;
+        //     float* dl_attprojw = grads.attprojw + l * C * C;
+        //     float* dl_attprojb = grads.attprojb + l * C;
+        //     float* dl_ln2w = grads.ln2w + l * C;
+        //     float* dl_ln2b = grads.ln2b + l * C;
+        //     float* dl_fcw = grads.fcw + l * 4*C * C;
+        //     float* dl_fcb = grads.fcb + l * 4*C;
+        //     float* dl_fcprojw = grads.fcprojw + l * C * 4*C;
+        //     float* dl_fcprojb = grads.fcprojb + l * C;
+        //     // get the pointers of the activations for this layer
+        //     float* l_ln1 = acts.ln1 + l * B * T * C;
+        //     float* l_ln1_mean = acts.ln1_mean + l * B * T;
+        //     float* l_ln1_rstd = acts.ln1_rstd + l * B * T;
+        //     float* l_qkv = acts.qkv + l * B * T * 3*C;
+        //     float* l_atty = acts.atty + l * B * T * C;
+        //     float* l_att = acts.att + l * B * NH * T * T;
+        //     float* l_residual2 = acts.residual2 + l * B * T * C;
+        //     float* l_ln2 = acts.ln2 + l * B * T * C;
+        //     float* l_ln2_mean = acts.ln2_mean + l * B * T;
+        //     float* l_ln2_rstd = acts.ln2_rstd + l * B * T;
+        //     float* l_fch = acts.fch + l * B * T * 4*C;
+        //     float* l_fch_gelu = acts.fch_gelu + l * B * T * 4*C;
+        //     // get the pointers of the gradients of the activations for this layer
+        //     float* dl_ln1 = grads_acts.ln1 + l * B * T * C;
+        //     float* dl_qkv = grads_acts.qkv + l * B * T * 3*C;
+        //     float* dl_atty = grads_acts.atty + l * B * T * C;
+        //     float* dl_preatt = grads_acts.preatt + l * B * NH * T * T;
+        //     float* dl_att = grads_acts.att + l * B * NH * T * T;
+        //     float* dl_attproj = grads_acts.attproj + l * B * T * C;
+        //     float* dl_residual2 = grads_acts.residual2 + l * B * T * C;
+        //     float* dl_ln2 = grads_acts.ln2 + l * B * T * C;
+        //     float* dl_fch = grads_acts.fch + l * B * T * 4*C;
+        //     float* dl_fch_gelu = grads_acts.fch_gelu + l * B * T * 4*C;
+        //     float* dl_fcproj = grads_acts.fcproj + l * B * T * C;
+        //     float* dl_residual3 = grads_acts.residual3 + l * B * T * C;
+    
+        //     // backprop this layer
+        //     residual_backward(l, c, dl_residual2, dl_fcproj, dl_residual3);
+        //     matmul_backward(dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4*C, C);
+        //     gelu_backward(dl_fch, l_fch, dl_fch_gelu, B*T*4*C);
+        //     matmul_backward(dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4*C);
+        //     layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
+        //     residual_backward(dresidual, dl_attproj, dl_residual2, B*T*C);
+        //     matmul_backward(dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
+        //     attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
+        //     matmul_backward(dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3*C);
+        //     layernorm_backward(dresidual, dl_ln1w, dl_ln1b, dl_ln1, residual, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
+        // }
+        // encoder_backward(grads.wte, grads.wpe, grads_acts.encoded, model->inputs, B, T, C);
+
     }
 }
 
@@ -382,7 +518,7 @@ fn main() {
     // build the DataLoaders from tokens files. For now use tiny_shakespeare if available
     let tiny_shakespeare_train: String = String::from("data/tinyshakespeare/tiny_shakespeare_train.bin");
     let tiny_shakespeare_val: String = String::from("data/tinyshakespeare/tiny_shakespeare_val.bin");
-    let train_loader = dataloader::DataLoader::new(&tiny_shakespeare_train, 0, 1);
+    let mut train_loader = dataloader::DataLoader::new(&tiny_shakespeare_train, 0, 1);
     let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
     println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
@@ -399,33 +535,21 @@ fn main() {
 
     // train
     // let time_instant: Instant = Instant::now();
-
-    for step in 0..40 {
-        // once in a while estimate the validation loss
-        if step % 10 == 0 {
-            let mut _val_loss: f32 = 0.0;
-            val_loader.reset();
-            for val_batch in 0..val_num_batches {
-                let (inputs, targets) = val_loader.next_batch();
-                println!("Forward {} is running", val_batch);
-                model.forward(true, inputs, targets);
-                _val_loss += model.mean_loss;
-            }
-        }
-    }
-
     // for step in 0..41 {
+    //     // once in a while estimate the validation loss
     //     if step % 10 == 0 {
     //         let mut val_loss: f32 = 0.0;
     //         val_loader.reset();
-    //         for i in 0..val_num_batches {
-    //             val_loader.next_batch();
-    //             model.forward(&val_loader.inputs, &val_loader.targets);
+    //         for val_batch in 0..val_num_batches {
+    //             let (inputs, targets) = val_loader.next_batch();
+    //             println!("Forward {} is running", val_batch);
+    //             model.forward(true, &inputs, &targets);
     //             val_loss += model.mean_loss;
     //         }
-        //     val_loss /= val_num_batches;
-        //     println!("val loss {}\n", val_loss);
-        // }
+    //         val_loss /= val_num_batches as f32;
+    //         println!("val loss {}\n", val_loss);
+    //     }
+    // }
 
         // // once in a while do model inference to print generated text
         // if (step > 0) && (step % 20 == 0) {
@@ -464,18 +588,22 @@ fn main() {
         //     println!("\n---\n");
         // }
 
-        // // do a training step
-        // let start_time = time_instant.now.elapsed().as_secs();
-        // train_loader.next_batch();
-        // model.forward(&train_loader.inputs, &train_loader.targets, B, T);
+        // do a training step
+        // let start_time = time_instant.elapsed().as_secs();
+        let (train_inputs, train_targets) = train_loader.next_batch();
+        // model.forward(true, &train_inputs, &train_targets);
         // model.zero_grad();
-        // model.backward();
+        model.backward(&train_inputs, &train_targets);
         // model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
         // let end_time = time_instant.now.elapsed().as_secs();
         // // TODO: wait what the fuck is happening in this line
         // let time_elapsed_s: f32 = (end_time.now() - start_time.now()) + (end.tv_nsec - start.tv_nsec) / 1e9;
         // println!("step %d: train loss %f (took %f ms)\n", step, model.mean_loss, time_elapsed_s * 1000);
 }
+
+// ----------------------- //
+// -- Forward Functions -- //
+// ----------------------- //
 
 fn lyrnrm_fwd(
     il: usize,
@@ -769,7 +897,7 @@ fn softmax_fwd(
 fn crossentropy_fwd(
     vp: usize,
     probs: &Vec<f32>,
-    targets: Vec<u32>,
+    targets: &Vec<u32>,
     losses: &mut Vec<f32>,
 ) {
     // output: losses is (B,T) of the individual losses at each position
@@ -781,6 +909,86 @@ fn crossentropy_fwd(
             let probs_bt: usize = b*(T*vp) + t*(vp);
             let ix: usize = targets[b*(T) + t] as usize;
             losses[b*(T) + t] = -1.0 * (probs[probs_bt+ix]).ln();
+        }
+    }
+}
+
+// ------------------------ //
+// -- Backward Functions -- //
+// ------------------------ //
+
+// fn residual_backward(
+//     l: usize, 
+//     c: usize, 
+//     dinp1: &mut Vec<f32>, 
+//     dinp2: &mut Vec<f32>, 
+//     dout: &Vec<f32>, 
+//     n: usize
+// ) {
+//     for b in 0..B {}
+//     for i in 0.. {
+//         dinp1[i] += dout[i];
+//         dinp2[i] += dout[i];
+//     }
+// }
+
+fn matmul_backward(
+    l: usize,
+    oc: usize,
+    ic: usize,
+    dout: &Vec<f32>, 
+    weight: &Vec<f32>,
+    inp: &Vec<f32>,
+    dinp: &mut Vec<f32>, 
+    dweight: &mut Vec<f32>, 
+    mut dbias: Option<&mut Vec<f32>>,
+) {
+    // most of the running time is spent here and in matmul_forward
+    // this backward could be done in a single "round" of loops
+    // but that doesn't afford an efficient parallelization strategy
+    // TODO: For CPU purposes I need to do this in a single "round" of loops like
+    // it's done above
+
+    for b in 0..B {
+        for t in 0..T {
+            println!("Backwards matmul {} out of {}", b*T+t, B*T);
+            for o in 0..oc {
+                let d: f32 = dout[l*(B*T*oc) + b*(T*oc) + t*(oc) + o];
+                for i in 0..ic {
+                    dinp[l*(B*T*ic) + b*(T*ic) + t*(ic) + i] += weight[l*(oc*ic) + o*(ic) + i] * d;
+                }
+                match dbias {
+                    Some(ref mut dbias_vec) => dbias_vec[l*oc + o] += d,
+                    _ => {},
+                };
+                for i in 0..ic {
+                    dweight[l*(oc*ic) + o*(ic) + i] += inp[l*(B*T*ic) + b*(T*ic) + t*(ic) + i] * d;
+                }
+            }
+        }
+    }
+}
+
+fn crossentropy_softmax_backward(
+    v: usize,
+    vp: usize,
+    targets: &Vec<u32>,
+    dlosses: &Vec<f32>,
+    probs: &Vec<f32>,
+    dlogits: &mut Vec<f32>,
+) {
+    // backwards through both softmax and crossentropy
+    for b in 0..B {
+        for t in 0..T {
+            let dloss: f32 = dlosses[b*T + t];
+            let ix: usize = targets[b*T + t] as usize;
+            // note we only loop to V, leaving the padded dimensions
+            // of dlogits untouched, so gradient there stays at zero
+            for i in 0..v {
+                let p: f32 = probs[b*(T*vp) + t*(vp) + i];
+                let indicator: f32 = if i == ix {1.0} else {0.0};
+                dlogits[b*(T*vp) + t*(vp) + i] += (p - indicator) * dloss;
+            }
         }
     }
 }
