@@ -1,6 +1,7 @@
 use std::fmt;
 use std::fs::File;
 use std::process::exit;
+use std::iter::zip;
 // use std::time::Instant;
 
 pub mod utils;
@@ -163,6 +164,15 @@ impl ParameterTensors {
             lnfb: vec![0f32; c], // (C)
         }
     }
+
+    pub fn fields(&mut self) -> Vec<&mut Vec<f32>> {
+        return vec![
+            &mut self.wte, &mut self.wpe, &mut self.ln1w, &mut self.ln1b,
+            &mut self.qkvw, &mut self.qkvb, &mut self.attprojw, &mut self.attprojb,
+            &mut self.ln2w, &mut self.ln2b, &mut self.fcw, &mut self.fcb,
+            &mut self.fcprojw, &mut self.fcprojb, &mut self.lnfw, &mut self.lnfb,
+        ]
+    }
 }
 
 impl fmt::Display for ParameterTensors {
@@ -260,8 +270,8 @@ struct GPT2 {
     acts: ActivationTensors,
     grads: ParameterTensors,
     grads_acts: ActivationTensors,
-    // m_memory: Option<Vec<f32>>,
-    // v_memory: Option<Vec<f32>>,
+    m_memory: ParameterTensors,
+    v_memory: ParameterTensors,
     // batch_size: u32, // the batch size (B) of current forward pass
     // seq_len: u32, // the sequence length (T) of current forward pass
     // inputs: &Vec<u32>, // the input tokens for the current forward pass
@@ -278,14 +288,16 @@ impl GPT2 {
         let acts: ActivationTensors = ActivationTensors::new(&config);
         let grads: ParameterTensors = ParameterTensors::new_empty(&config);
         let grads_acts: ActivationTensors = ActivationTensors::new(&config);
+        let m_memory: ParameterTensors = ParameterTensors::new_empty(&config);
+        let v_memory: ParameterTensors = ParameterTensors::new_empty(&config);
 
         return GPT2 {
             config: config,
             params: params,
             grads: grads,
             grads_acts: grads_acts,
-            // m_memory: None,
-            // v_memory: None,
+            m_memory: m_memory,
+            v_memory: v_memory,
             acts: acts,
             // batch_size: 0,
             // seq_len: 0,
@@ -386,8 +398,6 @@ impl GPT2 {
     }
 
     // pub fn zero_grad(&mut self) {
-
-
     //     if(model->grads_memory != NULL) { memset(model->grads_memory, 0, model->num_parameters * sizeof(float)); }
     //     if(model->grads_acts_memory != NULL) { memset(model->grads_acts_memory, 0, model->num_activations * sizeof(float)); }
     // }
@@ -509,6 +519,43 @@ impl GPT2 {
         encoder_backward(c, &mut self.grads.wte, &mut self.grads.wpe, &self.grads_acts.residual3, &inputs);
         println!("done");
     }
+
+    pub fn update(
+        &mut self, 
+        learning_rate: f32, 
+        beta1: f32, 
+        beta2: f32, 
+        eps: f32, 
+        weight_decay: f32, 
+        t: usize,
+    ) {
+        // Prepare zipped
+        // let zipped = 
+        let iter = zip(zip(zip(self.params.fields(), self.grads.fields()), self.m_memory.fields()), self.v_memory.fields());
+
+        // reference: https://pytorch.org/docs/stable/generated/torch.optim.AdamW.html
+        // m_mem_field, v_mem_field
+        for (((param_field, grad_field), m_field), v_field) in iter {
+            let field_length: usize = param_field.len();
+            for i in 0..field_length {
+                let param: f32 = param_field[i];
+                let grad: f32 = grad_field[i];
+        
+                // update the first moment (momentum)
+                let m: f32 = beta1 * m_field[i] + (1.0 - beta1) * grad;
+                // update the second moment (RMSprop)
+                let v: f32 = beta2 * v_field[i] + (1.0 - beta2) * grad * grad;
+                // bias-correct both moments
+                let m_hat: f32 = m / (1.0 - beta1.powf(t as f32));
+                let v_hat: f32 = v / (1.0 - beta2.powf(t as f32));
+        
+                // update
+                m_field[i] = m;
+                v_field[i] = v;
+                param_field[i] -= learning_rate * (m_hat / (v_hat.sqrt() + eps) + weight_decay * param);
+            }
+        }
+    }
 }
 
 impl fmt::Display for GPT2 {
@@ -607,7 +654,8 @@ fn main() {
         // model.forward(true, &train_inputs, &train_targets);
         // model.zero_grad();
         model.backward(&train_inputs, &train_targets);
-        // model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
+        let step: usize = 0;
+        model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
         // let end_time = time_instant.now.elapsed().as_secs();
         // // TODO: wait what the fuck is happening in this line
         // let time_elapsed_s: f32 = (end_time.now() - start_time.now()) + (end.tv_nsec - start.tv_nsec) / 1e9;
