@@ -406,7 +406,7 @@ impl GPT2 {
         let v: usize = self.config.vocab_size;
         let vp: usize = self.config.padded_vocab_size;
         let nl: usize = self.config.num_layers;
-        // size_t NH = model->config.num_heads;
+        let nh: usize = self.config.num_heads;
         let c: usize = self.config.channels;
 
         // backward pass: go in the reverse order of the forward pass, and call backward() functions
@@ -422,79 +422,92 @@ impl GPT2 {
         for i in 0..B*T {self.grads_acts.losses[i] = dloss_mean}
 
         println!("backwards crossentropy firing");
-        crossentropy_softmax_backward(v, vp, &targets, &self.grads_acts.losses, &self.acts.probs,&mut self.grads_acts.logits);
+        crossentropy_softmax_backward(v, vp, &mut self.grads_acts.logits, &self.grads_acts.losses, &self.acts.probs, &targets);
+        // crossentropy_softmax_backward(v, vp, &targets, &self.grads_acts.losses, &self.acts.probs,&mut self.grads_acts.logits);
         println!("backwards matmul firing");
-        matmul_backward(0, vp, c, &self.grads_acts.logits, &self.params.wte, &self.acts.lnf, &mut self.grads_acts.lnf, &mut self.grads.wte, None);
-        // float* residual = acts.residual3 + (L-1) * B * T * C; // last layer's residual
-        // float* dresidual = grads_acts.residual3 + (L-1) * B * T * C; // write to last layer's residual
-        // layernorm_backward(dresidual, grads.lnfw, grads.lnfb, grads_acts.lnf, residual, params.lnfw, acts.lnf_mean, acts.lnf_rstd, B, T, C);
+        matmul_backward(0, vp, c, &mut self.grads_acts.lnf, &mut self.grads.wte, None, &self.grads_acts.logits, &self.acts.lnf, &self.params.wte);
+        println!("layernorm backwards firing");
+        lyrnrm_bwd(nl-1, 0, c, &mut self.grads_acts.residual3, &mut self.grads.lnfw, &mut self.grads.lnfb, &mut self.grads_acts.lnf, &self.acts.residual3, &self.params.lnfw, &self.acts.lnf_mean, &self.acts.lnf_rstd);
 
-        // for l in (0..nl).rev() {
+        for l in (0..nl).rev() {
 
-        //     residual = l == 0 ? acts.encoded : acts.residual3 + (l-1) * B * T * C;
-        //     dresidual = l == 0 ? grads_acts.encoded : grads_acts.residual3 + (l-1) * B * T * C;
+            // residual = l == 0 ? acts.encoded : acts.residual3 + (l-1) * B * T * C;
+            // dresidual = l == 0 ? grads_acts.encoded : grads_acts.residual3 + (l-1) * B * T * C;
     
-        //     // get the pointers of the weights for this layer
-        //     float* l_ln1w = params.ln1w + l * C;
-        //     float* l_qkvw = params.qkvw + l * 3*C * C;
-        //     float* l_attprojw = params.attprojw + l * C * C;
-        //     float* l_ln2w = params.ln2w + l * C;
-        //     float* l_fcw = params.fcw + l * 4*C * C;
-        //     float* l_fcprojw = params.fcprojw + l * C * 4*C;
-        //     // get the pointers of the gradients of the weights for this layer
-        //     float* dl_ln1w = grads.ln1w + l * C;
-        //     float* dl_ln1b = grads.ln1b + l * C;
-        //     float* dl_qkvw = grads.qkvw + l * 3*C * C;
-        //     float* dl_qkvb = grads.qkvb + l * 3*C;
-        //     float* dl_attprojw = grads.attprojw + l * C * C;
-        //     float* dl_attprojb = grads.attprojb + l * C;
-        //     float* dl_ln2w = grads.ln2w + l * C;
-        //     float* dl_ln2b = grads.ln2b + l * C;
-        //     float* dl_fcw = grads.fcw + l * 4*C * C;
-        //     float* dl_fcb = grads.fcb + l * 4*C;
-        //     float* dl_fcprojw = grads.fcprojw + l * C * 4*C;
-        //     float* dl_fcprojb = grads.fcprojb + l * C;
-        //     // get the pointers of the activations for this layer
-        //     float* l_ln1 = acts.ln1 + l * B * T * C;
-        //     float* l_ln1_mean = acts.ln1_mean + l * B * T;
-        //     float* l_ln1_rstd = acts.ln1_rstd + l * B * T;
-        //     float* l_qkv = acts.qkv + l * B * T * 3*C;
-        //     float* l_atty = acts.atty + l * B * T * C;
-        //     float* l_att = acts.att + l * B * NH * T * T;
-        //     float* l_residual2 = acts.residual2 + l * B * T * C;
-        //     float* l_ln2 = acts.ln2 + l * B * T * C;
-        //     float* l_ln2_mean = acts.ln2_mean + l * B * T;
-        //     float* l_ln2_rstd = acts.ln2_rstd + l * B * T;
-        //     float* l_fch = acts.fch + l * B * T * 4*C;
-        //     float* l_fch_gelu = acts.fch_gelu + l * B * T * 4*C;
-        //     // get the pointers of the gradients of the activations for this layer
-        //     float* dl_ln1 = grads_acts.ln1 + l * B * T * C;
-        //     float* dl_qkv = grads_acts.qkv + l * B * T * 3*C;
-        //     float* dl_atty = grads_acts.atty + l * B * T * C;
-        //     float* dl_preatt = grads_acts.preatt + l * B * NH * T * T;
-        //     float* dl_att = grads_acts.att + l * B * NH * T * T;
-        //     float* dl_attproj = grads_acts.attproj + l * B * T * C;
-        //     float* dl_residual2 = grads_acts.residual2 + l * B * T * C;
-        //     float* dl_ln2 = grads_acts.ln2 + l * B * T * C;
-        //     float* dl_fch = grads_acts.fch + l * B * T * 4*C;
-        //     float* dl_fch_gelu = grads_acts.fch_gelu + l * B * T * 4*C;
-        //     float* dl_fcproj = grads_acts.fcproj + l * B * T * C;
-        //     float* dl_residual3 = grads_acts.residual3 + l * B * T * C;
+            // // get the pointers of the weights for this layer
+            // float* l_ln1w = params.ln1w + l * C;
+            // float* l_qkvw = params.qkvw + l * 3*C * C;
+            // float* l_attprojw = params.attprojw + l * C * C;
+            // float* l_ln2w = params.ln2w + l * C;
+            // float* l_fcw = params.fcw + l * 4*C * C;
+            // float* l_fcprojw = params.fcprojw + l * C * 4*C;
+            // // get the pointers of the gradients of the weights for this layer
+            // float* dl_ln1w = grads.ln1w + l * C;
+            // float* dl_ln1b = grads.ln1b + l * C;
+            // float* dl_qkvw = grads.qkvw + l * 3*C * C;
+            // float* dl_qkvb = grads.qkvb + l * 3*C;
+            // float* dl_attprojw = grads.attprojw + l * C * C;
+            // float* dl_attprojb = grads.attprojb + l * C;
+            // float* dl_ln2w = grads.ln2w + l * C;
+            // float* dl_ln2b = grads.ln2b + l * C;
+            // float* dl_fcw = grads.fcw + l * 4*C * C;
+            // float* dl_fcb = grads.fcb + l * 4*C;
+            // float* dl_fcprojw = grads.fcprojw + l * C * 4*C;
+            // float* dl_fcprojb = grads.fcprojb + l * C;
+            // // get the pointers of the activations for this layer
+            // float* l_ln1 = acts.ln1 + l * B * T * C;
+            // float* l_ln1_mean = acts.ln1_mean + l * B * T;
+            // float* l_ln1_rstd = acts.ln1_rstd + l * B * T;
+            // float* l_qkv = acts.qkv + l * B * T * 3*C;
+            // float* l_atty = acts.atty + l * B * T * C;
+            // float* l_att = acts.att + l * B * NH * T * T;
+            // float* l_residual2 = acts.residual2 + l * B * T * C;
+            // float* l_ln2 = acts.ln2 + l * B * T * C;
+            // float* l_ln2_mean = acts.ln2_mean + l * B * T;
+            // float* l_ln2_rstd = acts.ln2_rstd + l * B * T;
+            // float* l_fch = acts.fch + l * B * T * 4*C;
+            // float* l_fch_gelu = acts.fch_gelu + l * B * T * 4*C;
+            // // get the pointers of the gradients of the activations for this layer
+            // float* dl_ln1 = grads_acts.ln1 + l * B * T * C;
+            // float* dl_qkv = grads_acts.qkv + l * B * T * 3*C;
+            // float* dl_atty = grads_acts.atty + l * B * T * C;
+            // float* dl_preatt = grads_acts.preatt + l * B * NH * T * T;
+            // float* dl_att = grads_acts.att + l * B * NH * T * T;
+            // float* dl_attproj = grads_acts.attproj + l * B * T * C;
+            // float* dl_residual2 = grads_acts.residual2 + l * B * T * C;
+            // float* dl_ln2 = grads_acts.ln2 + l * B * T * C;
+            // float* dl_fch = grads_acts.fch + l * B * T * 4*C;
+            // float* dl_fch_gelu = grads_acts.fch_gelu + l * B * T * 4*C;
+            // float* dl_fcproj = grads_acts.fcproj + l * B * T * C;
+            // float* dl_residual3 = grads_acts.residual3 + l * B * T * C;
     
-        //     // backprop this layer
-        //     residual_backward(l, c, dl_residual2, dl_fcproj, dl_residual3);
-        //     matmul_backward(dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4*C, C);
-        //     gelu_backward(dl_fch, l_fch, dl_fch_gelu, B*T*4*C);
-        //     matmul_backward(dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4*C);
-        //     layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
-        //     residual_backward(dresidual, dl_attproj, dl_residual2, B*T*C);
-        //     matmul_backward(dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
-        //     attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
-        //     matmul_backward(dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3*C);
-        //     layernorm_backward(dresidual, dl_ln1w, dl_ln1b, dl_ln1, residual, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
-        // }
-        // encoder_backward(grads.wte, grads.wpe, grads_acts.encoded, model->inputs, B, T, C);
-
+            // backprop this layer
+            println!("res bwk");
+            residual_backward(l, c, &mut self.grads_acts.residual2, &mut self.grads_acts.fcproj, &self.grads_acts.residual3);
+            println!("matmul backward in layer loop");
+            matmul_backward(l, c, 4*c, &mut self.grads_acts.fch_gelu, &mut self.grads.fcprojw, Some(&mut self.grads.fcprojb), &self.grads_acts.fcproj, &self.acts.fch_gelu, &self.params.fcprojw);
+            println!("gelu backward in layer loop");
+            gelu_backward(l, c, &mut self.grads_acts.fch, &mut self.acts.fch, &self.grads_acts.fch_gelu);
+            println!("2 matmul backward in layer loop");
+            matmul_backward(l, 4*c, c, &mut self.grads_acts.ln2, &mut self.grads.fcw, Some(&mut self.grads.fcb), &self.grads_acts.fch, &self.acts.ln2, &mut self.params.fcw);
+            println!("layernorm backward in layer loop");
+            lyrnrm_bwd(l, l, c, &mut self.grads_acts.residual2, &mut self.grads.ln2w, &mut self.grads.ln2b, &mut self.grads_acts.ln2, &self.acts.residual2, &self.params.ln2w, &self.acts.ln2_mean, &self.acts.ln2_rstd);
+            println!("residual backward in layer loop");
+            residual_backward(l, c, &mut self.grads_acts.residual3, &mut self.grads_acts.attproj, &self.grads_acts.residual2);
+            println!("3 matmul backward in layer loop ");
+            matmul_backward(l, c, c, &mut self.grads_acts.atty, &mut self.grads.attprojw, Some(&mut self.grads.attprojb), &self.grads_acts.attproj, &self.acts.atty, &self.params.attprojw);
+            println!("attention bwd in layer loop");
+            attention_backward(l, c, nh, &mut self.grads_acts.qkv, &mut self.grads_acts.preatt, &mut self.grads_acts.att, &self.grads_acts.atty, &self.acts.qkv, &self.acts.att);
+            println!("4 matmul bwd in layer loop");
+            matmul_backward(l, 3*c, c, &mut self.grads_acts.ln1, &mut self.grads.qkvw, Some(&mut self.grads.qkvb), &self.grads_acts.qkv, &self.acts.ln1, &self.params.qkvw);
+            println!("2 layernorm backward in layer loop");
+            lyrnrm_bwd(l, l, c, &mut self.grads_acts.residual3, &mut self.grads.ln1w, &mut self.grads.ln1b, &mut self.grads_acts.ln1, &self.acts.residual3, &self.params.ln1w, &self.acts.ln1_mean, &self.acts.ln1_rstd);
+            println!("loop done");
+        }
+        println!("encoder backward");
+        // dout is residual[3] for code readability
+        encoder_backward(c, &mut self.grads.wte, &mut self.grads.wpe, &self.grads_acts.residual3, &inputs);
+        println!("done");
     }
 }
 
@@ -519,9 +532,9 @@ fn main() {
     let tiny_shakespeare_train: String = String::from("data/tinyshakespeare/tiny_shakespeare_train.bin");
     let tiny_shakespeare_val: String = String::from("data/tinyshakespeare/tiny_shakespeare_val.bin");
     let mut train_loader = dataloader::DataLoader::new(&tiny_shakespeare_train, 0, 1);
-    let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
+    // let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
-    println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
+    // println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
     let val_num_batches: usize = 5;
 
     // build the Tokenizer
@@ -917,31 +930,203 @@ fn crossentropy_fwd(
 // -- Backward Functions -- //
 // ------------------------ //
 
-// fn residual_backward(
-//     l: usize, 
-//     c: usize, 
-//     dinp1: &mut Vec<f32>, 
-//     dinp2: &mut Vec<f32>, 
-//     dout: &Vec<f32>, 
-//     n: usize
-// ) {
-//     for b in 0..B {}
-//     for i in 0.. {
-//         dinp1[i] += dout[i];
-//         dinp2[i] += dout[i];
-//     }
-// }
+fn encoder_backward(
+    c: usize,
+    dwte: &mut Vec<f32>, 
+    dwpe: &mut Vec<f32>,
+    dout: &Vec<f32>, 
+    inp: &Vec<u32>,
+) {
+    for b in 0..B {
+        for t in 0..T {
+            let dout_bt: usize = b*(T*c) + t*(c);
+            let ix: usize = inp[b*(T) + t] as usize;
+            println!("{}", ix);
+            let dwte_ix: usize = ix*(c);
+            let dwpe_t: usize = t*(c);
+            for i in 0..c {
+                let d: f32 = dout[dout_bt+i];
+                dwte[dwte_ix+i] += d;
+                dwpe[dwpe_t+i] += d;
+            }
+        }
+    }
+}
+
+fn attention_backward(
+    l: usize,
+    c: usize,
+    nh: usize,
+    dinp: &mut Vec<f32>, 
+    dpreatt: &mut Vec<f32>, 
+    datt: &mut Vec<f32>,
+    dout: &Vec<f32>, 
+    inp: &Vec<f32>, 
+    att: &Vec<f32>,
+) {
+    // inp/dinp are (B, T, 3C) Q,K,V
+    // att/datt/dpreatt are (B, NH, T, T)
+    // dout is (B, T, C)
+    let c3: usize = c*3;
+    let hs: usize = c / nh; // head size
+    let scale: f32 = 1.0 / (hs as f32).sqrt();
+
+    for b in 0..B {
+        for t in 0..T {
+            for h in 0..nh {
+                let att_lbth: usize = l*(B*nh*T*T) + b*(nh*T*T) + h*(T*T) + t*(T);
+                let datt_lbth: usize = l*(B*nh*T*T) + b*(nh*T*T) + h*(T*T) + t*(T);
+                let dpreatt_lbth: usize = l*(B*nh*T*T) + b*(nh*T*T) + h*(T*T) + t*(T);
+                let dquery_lbth: usize = l*(B*T*c3) + b*(T*c3) + t*(c3) + h*(hs);
+                let query_lbth: usize = l*(B*T*c3) + b*(T*c3) + t*(c3) + h*(hs);
+
+                // backward pass 4, through the value accumulation
+                let dout_lbth: usize = l*(B*T*c) + b*(T*c) + t*(c) + h*(hs);
+                for t2 in 0..t {
+                    let value_lbthc: usize = l*(B*T*c3) + b*(T*c3) + t2*(c3) + h*(hs) + c*2; // +C*2 because it's value
+                    let dvalue_lbthc: usize = l*(B*T*c3) + b*(T*c3) + t2*(c3) + h*(hs) + c*2;
+                    for i in 0..hs {
+                        // in the forward pass this was:
+                        // out_bth[i] += att_bth[t2] * value_t2[i];
+                        // so now we have:
+                        datt[datt_lbth+t2] += inp[value_lbthc+i] * dout[dout_lbth+i];
+                        dinp[dvalue_lbthc+i] += att[att_lbth+t2] * dout[dout_lbth+i];
+                    }
+                }
+
+                // backward pass 2 & 3, the softmax
+                // note that softmax (like e.g. tanh) doesn't need the input (preatt) to backward
+                for t2 in 0..t {
+                    for t3 in 0..t {
+                        let indicator: f32 = if t2 == t3 {1.0} else {0.0};
+                        let local_derivative: f32 = att[att_lbth+t2] * (indicator - att[att_lbth+t3]);
+                        dpreatt[dpreatt_lbth+t3] += local_derivative * datt[datt_lbth+t2];
+                    }
+                }
+
+                // backward pass 1, the query @ key matmul
+                for t2 in 0..t {
+                    let key_lbthc: usize = l*(B*T*c3)+ b*(T*c3) + t2*(c3) + h*(hs) + c; // +C because it's key
+                    let dkey_lbthc: usize = l*(B*T*c3) + b*(T*c3) + t2*(c3) + h*(hs) + c; // +C because it's key
+                    for i in 0..hs {
+                        // in the forward pass this was:
+                        // preatt_bth[t2] += (query_t[i] * key_t2[i]) * scale;
+                        // so now we have:
+                        dinp[dquery_lbth+i] += inp[key_lbthc+i] * dpreatt[dpreatt_lbth+t2] * scale;
+                        dinp[dkey_lbthc+i] += inp[query_lbth+i] * dpreatt[dpreatt_lbth+t2] * scale;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// we want to use -Ofast optimization, but sadly GeLU breaks, so disable this flag just for it (#168)
+// #pragma float_control(precise, on, push)
+// #if defined(__GNUC__) && !defined(__clang__)
+// __attribute__((optimize("no-finite-math-only")))
+// #endif
+fn gelu_backward(
+    l: usize,
+    c: usize,
+    dinp: &mut Vec<f32>, 
+    inp: &mut Vec<f32>,
+    dout: &Vec<f32>
+) {
+    const M_PI: f32 = std::f32::consts::PI;
+    const GELU_SCALING_FACTOR: f32 = 2.0 / M_PI; // needs a square root
+
+    let skip: usize = l*(B*T*4*c);
+    for i in 0..(B*T*4*c) {
+        let x: f32 = inp[skip+i];
+        let cube: f32 = 0.044715 * x * x * x;
+        let tanh_arg: f32 = GELU_SCALING_FACTOR * (x + cube);
+        let tanh_out: f32 = tanh_arg.tanh();
+        let coshf_out: f32 = tanh_arg.cosh();
+        let sech_out: f32 = 1.0 / (coshf_out * coshf_out);
+        let local_grad: f32 = 0.5 * (1.0 + tanh_out) + x * 0.5 * sech_out * GELU_SCALING_FACTOR * (1.0 + 3.0 * 0.044715 * x * x);
+        dinp[i] += local_grad * dout[i];
+    }
+}
+// #pragma float_control(pop)
+
+fn residual_backward(
+    l: usize, 
+    c: usize, 
+    dinp1: &mut Vec<f32>, 
+    dinp2: &mut Vec<f32>, 
+    dout: &Vec<f32>
+) {
+    let skip: usize = l*(B*T*c);
+    for i in 0..(B*T*c) {
+        dinp1[skip+i] += dout[skip+i];
+        dinp2[skip+i] += dout[skip+i];
+    }
+}
+
+fn lyrnrm_bwd(
+    il: usize,
+    ol: usize,
+    c: usize,
+    dinp: &mut Vec<f32>, 
+    dweight: &mut Vec<f32>, 
+    dbias: &mut Vec<f32>,
+    dout: &mut Vec<f32>, 
+    inp: &Vec<f32>, 
+    weight: &Vec<f32>, 
+    mean: &Vec<f32>, 
+    rstd: &Vec<f32>,
+) {
+    for b in 0..B {
+        for t in 0..T {
+            let dout_lbt: usize = ol*(B*T*c) + b*(T*c) + t*(c);
+            let inp_lbt: usize = il*(B*T*c) + b*(T*c) + t*(c);
+            let dinp_lbt: usize = il*(B*T*c) + b*(T*c) + t*(c);
+            let mean_val: f32 = mean[ol*(B*T) + b*(T) + t];
+            let rstd_val: f32 = rstd[ol*(B*T) + b*(T) + t];
+
+            // first: two reduce operations
+            let mut dnorm_mean: f32 = 0.0;
+            let mut dnorm_norm_mean: f32 = 0.0;
+            for i in 0..c {
+                let norm_bti: f32 = (inp[inp_lbt + i] - mean_val) * rstd_val;
+                let dnorm_i: f32 = weight[i] * dout[dout_lbt + i];
+                dnorm_mean += dnorm_i;
+                dnorm_norm_mean += dnorm_i * norm_bti;
+            }
+            dnorm_mean = dnorm_mean / c as f32;
+            dnorm_norm_mean = dnorm_norm_mean / c as f32;
+
+            // now iterate again and accumulate all the gradients
+            for i in 0..c {
+                let norm_bti: f32 = (inp[inp_lbt + i] - mean_val) * rstd_val;
+                let dnorm_i: f32 = weight[i] * dout[dout_lbt + i];
+                // gradient contribution to bias
+                dbias[i] += dout[dout_lbt + i];
+                // gradient contribution to weight
+                dweight[i] += norm_bti * dout[dout_lbt + i];
+                // gradient contribution to input
+                let mut dval: f32 = 0.0;
+                dval += dnorm_i; // term 1
+                dval -= dnorm_mean; // term 2
+                dval -= norm_bti * dnorm_norm_mean; // term 3
+                dval *= rstd_val; // final scale
+                dinp[dinp_lbt + i] += dval;
+            }
+        }
+    }
+}
 
 fn matmul_backward(
     l: usize,
     oc: usize,
     ic: usize,
-    dout: &Vec<f32>, 
-    weight: &Vec<f32>,
-    inp: &Vec<f32>,
-    dinp: &mut Vec<f32>, 
-    dweight: &mut Vec<f32>, 
+    dinp: &mut Vec<f32>,
+    dweight: &mut Vec<f32>,
     mut dbias: Option<&mut Vec<f32>>,
+    dout: &Vec<f32>,
+    inp: &Vec<f32>,
+    weight: &Vec<f32>,
 ) {
     // most of the running time is spent here and in matmul_forward
     // this backward could be done in a single "round" of loops
@@ -965,6 +1150,7 @@ fn matmul_backward(
                     dweight[l*(oc*ic) + o*(ic) + i] += inp[l*(B*T*ic) + b*(T*ic) + t*(ic) + i] * d;
                 }
             }
+            return;
         }
     }
 }
@@ -972,10 +1158,10 @@ fn matmul_backward(
 fn crossentropy_softmax_backward(
     v: usize,
     vp: usize,
-    targets: &Vec<u32>,
+    dlogits: &mut Vec<f32>,
     dlosses: &Vec<f32>,
     probs: &Vec<f32>,
-    dlogits: &mut Vec<f32>,
+    targets: &Vec<u32>,
 ) {
     // backwards through both softmax and crossentropy
     for b in 0..B {
