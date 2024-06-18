@@ -316,18 +316,18 @@ impl GPT2 {
 
     pub fn forward(&mut self, is_train: bool, inputs: &Vec<u32>, targets: &Vec<u32>) {
         // convenience parameters (size_t to help prevent int overflow)
-        let v = self.config.vocab_size;
-        let vp = self.config.padded_vocab_size;
-        let nl = self.config.num_layers;
-        let nh = self.config.num_heads;
-        let c = self.config.channels;
+        let v: usize = self.config.vocab_size;
+        let vp: usize = self.config.padded_vocab_size;
+        let nl: usize = self.config.num_layers;
+        let nh: usize = self.config.num_heads;
+        let c: usize = self.config.channels;
 
         // validate inputs, all indices must be in the range [0, V)
         for i in 0..B*T {
             // assert!(0 <= inputs[i]);
-            assert!(inputs[i] < v as u32);
+            assert!(inputs[i] < (v as u32));
             // assert!(0 <= targets[i]);
-            assert!(targets[i] < v as u32);
+            assert!(targets[i] < (v as u32));
         }
 
         // forward pass
@@ -532,9 +532,9 @@ fn main() {
     let tiny_shakespeare_train: String = String::from("data/tinyshakespeare/tiny_shakespeare_train.bin");
     let tiny_shakespeare_val: String = String::from("data/tinyshakespeare/tiny_shakespeare_val.bin");
     let mut train_loader = dataloader::DataLoader::new(&tiny_shakespeare_train, 0, 1);
-    // let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
+    let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
-    // println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
+    println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
     let val_num_batches: usize = 5;
 
     // build the Tokenizer
@@ -939,15 +939,18 @@ fn encoder_backward(
 ) {
     for b in 0..B {
         for t in 0..T {
-            let dout_bt: usize = b*(T*c) + t*(c);
-            let ix: usize = inp[b*(T) + t] as usize;
-            println!("{}", ix);
-            let dwte_ix: usize = ix*(c);
-            let dwpe_t: usize = t*(c);
+            let dout_lbt: usize = 0*(B*T*c) + b*(T*c) + t*(c);
+            let idx: usize = inp[b*(T) + t] as usize;
             for i in 0..c {
-                let d: f32 = dout[dout_bt+i];
-                dwte[dwte_ix+i] += d;
-                dwpe[dwpe_t+i] += d;
+                println!("vocab index: {}", idx);
+                println!("b: {}", b);
+                println!("t: {}", t);
+                println!("idx*c: {}", idx*c);
+                println!("dwte array access: {}", idx*(c)+i);
+                println!("dwte length: {}", dwte.len());
+                let d: f32 = dout[dout_lbt+i];
+                dwte[idx*(c)+i] += d;
+                dwpe[t*(c)+i] += d;
             }
         }
     }

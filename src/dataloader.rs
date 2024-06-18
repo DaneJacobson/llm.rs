@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufReader, Read, Cursor};
+use std::io::{BufReader, Read, Seek, SeekFrom, Cursor};
 use std::process::exit;
 
 use glob::glob;
@@ -62,7 +62,7 @@ impl DataLoader {
             let mut tokens_file: File = utils::fopen_check(&gl_pathv[shard_index]);
             
             // validate the header
-            let shard_header: [u32; 256] = utils::read_header(&mut tokens_file);
+            let shard_header: [u32; HEADER_SIZE] = utils::read_header(&mut tokens_file);
             if shard_header[0] != 20240520 {
                 println!("Bad magic in the data file, check file\n");
                 println!("{}", shard_header[0]);
@@ -92,6 +92,9 @@ impl DataLoader {
             ntok_total, 
             gl_pathc
         );
+        println!("DataLoader: process_rank: {}", process_rank);
+        println!("DataLoader: number of processes: {}", n_proc);
+        println!("current position {}", (HEADER_SIZE*16 + process_rank*B*T*16) as u64);
         
         return DataLoader {
             process_rank: process_rank,
@@ -99,7 +102,7 @@ impl DataLoader {
             gl_pathc: gl_pathc,
             gl_pathv: gl_pathv,
             current_shard: 0,
-            current_position: 0,
+            current_position: (HEADER_SIZE*16 + process_rank*B*T*16) as u64,
             buffer: [0u16; BUFFER_SIZE], // we will read data from the current file into this buffer
             // public variables that could be accessed from outside
             num_tokens: ntok_total, // total number of tokens
@@ -134,22 +137,27 @@ impl DataLoader {
         let mut targets: Vec<u32> = vec![0u32; B*T];
 
         // read B*T+1 u16 tokens from the file into buffer
-        let file = utils::fopen_check(&self.gl_pathv[self.current_shard]);
+        println!("next batch current shard: {}", self.current_shard);
+        println!("next batch current position: {}", self.current_position);
+        let file: File = utils::fopen_check(&self.gl_pathv[self.current_shard]);
         let mut reader = BufReader::new(&file);
+        reader.seek(SeekFrom::Start(self.current_position as u64)).unwrap();
         let mut temp_buf = [0u8; 2 * BUFFER_SIZE];
         reader.read_exact(&mut temp_buf).unwrap();
 
-        // Convert byte intelligences to u32 array of size 256
+        // Convert byte intelligences to u16 array of size 256
         let mut cursor: Cursor<[u8; 2 * BUFFER_SIZE]> = Cursor::new(temp_buf);
         for value in self.buffer.iter_mut() {
             let mut bytes: [u8; 2] = [0u8; 2];
             cursor.read_exact(&mut bytes).unwrap();
             *value = u16::from_ne_bytes(bytes);
+            // println!("*Value: {}", value);
         }
         
         // decode the buffer into inputs and targets (cast to int)
         println!("{}", self.inputs.len());
         for i in 0..B*T {
+            println!("Loading buffer: {}", self.buffer[i]);
             inputs[i] = self.buffer[i] as u32;
             targets[i] = self.buffer[i + 1] as u32;
         }
