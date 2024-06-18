@@ -262,6 +262,17 @@ impl ActivationTensors {
             losses: vec![0f32; B*T],
         }
     }
+
+    pub fn fields(&mut self) -> Vec<&mut Vec<f32>> {
+        return vec![
+            &mut self.ln1, &mut self.ln1_mean, &mut self.ln1_rstd, &mut self.qkv,
+            &mut self.atty, &mut self.preatt, &mut self.att, &mut self.attproj, 
+            &mut self.residual2, &mut self.ln2, &mut self.ln2_mean, &mut self.ln2_rstd, 
+            &mut self.fch, &mut self.fch_gelu, &mut self.fcproj, &mut self.residual3, 
+            &mut self.lnf, &mut self.lnf_mean, &mut self.lnf_rstd, &mut self.logits, 
+            &mut self.probs, &mut self.losses
+        ]
+    }
 }
 
 struct GPT2 {
@@ -520,6 +531,20 @@ impl GPT2 {
         println!("done");
     }
 
+    pub fn zero_grad(&mut self) {
+        for grad_field in self.grads.fields() {
+            for i in 0..grad_field.len() {
+                grad_field[i] = 0.0;
+            }
+        }
+
+        for grad_acts_field in self.grads_acts.fields() {
+            for i in 0..grad_acts_field.len() {
+                grad_acts_field[i] = 0.0;
+            }
+        }
+    }
+
     pub fn update(
         &mut self, 
         learning_rate: f32, 
@@ -651,10 +676,14 @@ fn main() {
         // do a training step
         // let start_time = time_instant.elapsed().as_secs();
         let (train_inputs, train_targets) = train_loader.next_batch();
-        // model.forward(true, &train_inputs, &train_targets);
-        // model.zero_grad();
+        println!("firing forward");
+        model.forward(true, &train_inputs, &train_targets);
+        println!("firing zero grad");
+        model.zero_grad();
+        println!("firing backward");
         model.backward(&train_inputs, &train_targets);
         let step: usize = 0;
+        println!("firing update");
         model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
         // let end_time = time_instant.now.elapsed().as_secs();
         // // TODO: wait what the fuck is happening in this line
