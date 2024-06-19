@@ -116,26 +116,6 @@ impl GPT2 {
         };
     }
 
-    fn encoder_forward(&mut self, inputs: &Vec<u32>) {
-        // out is (B,T,C). At each position (b,t), a C-dimensional vector summarizing token & position
-        // inp is (B,T) of integers, holding the token ids at each (b,t) position
-        // wte is (V,C) of token embeddings, short for "weight token embeddings"
-        // wpe is (maxT,C) of position embeddings, short for "weight positional embedding"
-
-        let c = self.config.channels;
-        for b in 0..B {
-            for t in 0..T {
-                let idx = inputs[b*(T) + t] as usize;
-                for i in 0..c {
-                    let wte_val: f32 = self.params.wte[idx*c + i];
-                    let wpe_val: f32 = self.params.wpe[t*c + i];
-                    // pretend that the encoding is residual3[0], layer is 0
-                    self.acts.residual3[0*(B*T*c) + b*(T*c) + t*(c) + i] = wte_val + wpe_val;
-                }
-            }
-        }
-    }
-
     pub fn forward(&mut self, is_train: bool, inputs: &Vec<u32>, targets: &Vec<u32>) {
         // convenience parameters (size_t to help prevent int overflow)
         let v: usize = self.config.vocab_size;
@@ -152,7 +132,8 @@ impl GPT2 {
 
         // forward pass
         println!("Encoder firing");
-        self.encoder_forward(&inputs); // encoding goes into residual3[0] to bootstrap cycle
+        // encoding goes into residual3[0] to bootstrap cycle
+        encoder_forward(c, &inputs, &self.params.wte, &self.params.wpe, &mut self.acts.residual3);
         for l in 0..nl {
             println!("Layer {} is running", l);
             // Multi-Head Attention
@@ -341,6 +322,30 @@ impl fmt::Display for GPT2 {
 // ----------------------- //
 // -- Forward Functions -- //
 // ----------------------- //
+
+fn encoder_forward(
+    c: usize,
+    inputs: &Vec<u32>,
+    wte: &Vec<f32>,
+    wpe: &Vec<f32>,
+    out: &mut Vec<f32>,
+) {
+    // out is (B,T,C). At each position (b,t), a C-dimensional vector summarizing token & position
+    // inp is (B,T) of integers, holding the token ids at each (b,t) position
+    // wte is (V,C) of token embeddings, short for "weight token embeddings"
+    // wpe is (maxT,C) of position embeddings, short for "weight positional embedding"
+    for b in 0..B {
+        for t in 0..T {
+            let idx = inputs[b*(T) + t] as usize;
+            for i in 0..c {
+                let wte_val: f32 = wte[idx*c + i];
+                let wpe_val: f32 = wpe[t*c + i];
+                // pretend that the encoding is residual3[0], layer is 0
+                out[0*(B*T*c) + b*(T*c) + t*(c) + i] = wte_val + wpe_val;
+            }
+        }
+    }
+}
 
 fn lyrnrm_fwd(
     il: usize,
