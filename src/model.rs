@@ -131,47 +131,30 @@ impl GPT2 {
         }
 
         // forward pass
-        println!("Encoder firing");
         // encoding goes into residual3[0] to bootstrap cycle
         encoder_forward(c, &inputs, &self.params.wte, &self.params.wpe, &mut self.acts.residual3);
         for l in 0..nl {
-            println!("Layer {} is running", l);
             // Multi-Head Attention
-            println!("lyrnrm1");
             lyrnrm_fwd(l, l, c, &self.acts.residual3, &self.params.ln1w, &self.params.ln1b, &mut self.acts.ln1, &mut self.acts.ln1_mean, &mut self.acts.ln1_rstd);
-            println!("matmul1");
             matmul_fwd(l, c, 3*c, &self.acts.ln1, &self.params.qkvw, Some(&self.params.qkvb), &mut self.acts.qkv);
-            println!("attent");
             attent_fwd(l, c, nh, &self.acts.qkv, &mut self.acts.preatt, &mut self.acts.att, &mut self.acts.atty);
-            println!("matmul2");
             matmul_fwd(l, c, c, &self.acts.atty, &self.params.attprojw, Some(&self.params.attprojb), &mut self.acts.attproj);
-            println!("residual");
             residual_fwd(l, c,&self.acts.residual3, &self.acts.attproj, &mut self.acts.residual2);
-            println!("lyrnrm2");
             lyrnrm_fwd(l, l, c, &self.acts.residual2, &self.params.ln2w, &self.params.ln2b, &mut self.acts.ln2, &mut self.acts.ln2_mean, &mut self.acts.ln2_rstd);
             // MLP
-            println!("mlp matmul");
             matmul_fwd(l, c, 4*c, &self.acts.ln2, &self.params.fcw, Some(&self.params.fcb), &mut self.acts.fch);
-            println!("gelu");
             gelu_fwd(l, c, &self.acts.fch, &mut self.acts.fch_gelu);
-            println!("mlp matmul2");
             matmul_fwd(l, 4*c, c, &self.acts.fch_gelu, &self.params.fcprojw, Some(&self.params.fcprojb), &mut self.acts.fcproj);
-            println!("mlp residual");
             residual_fwd(l, c, &self.acts.residual2, &self.acts.residual3, &mut self.acts.fcproj);
-            println!("Layer {} is done", l);
         }
 
         // last residual is in residual3[-1]
-        println!("Last layernorm firing");
         lyrnrm_fwd(nl-1, 0, c, &self.acts.residual3, &self.params.lnfw, &self.params.lnfb, &mut self.acts.lnf, &mut self.acts.lnf_mean, &mut self.acts.lnf_rstd,);
-        println!("Last matmul fwd naive firing");
         matmul_fwd( 0, c, vp, &self.acts.lnf, &self.params.wte, None, &mut self.acts.logits);
-        println!("Softmax firing");
         softmax_fwd(v, vp, &self.acts.logits, &mut self.acts.probs);
 
         // also forward the cross-entropy loss function if we have the targets
         if is_train {
-            println!("crossentropy firing");
             crossentropy_fwd(vp, &self.acts.probs, &targets, &mut self.acts.losses);
             // for convenience also evaluate the mean loss
             self.mean_loss = 0.0;
@@ -179,14 +162,12 @@ impl GPT2 {
             for i in 0..B*T {self.mean_loss += self.acts.losses[i]};
             self.mean_loss /= (B*T) as f32;
         } else {
-            println!("no trainig");
             // if we don't have targets, we don't have a loss
             self.mean_loss = -1.0;
         }
     }
 
     pub fn backward(&mut self, inputs: &Vec<u32>, targets: &Vec<u32>) {
-        println!("backward pass runs");
         // double check we forwarded previously, with targets
         if self.mean_loss == -1.0 {
             println!("Error: must forward with targets before backward\n");
@@ -207,42 +188,25 @@ impl GPT2 {
         let dloss_mean: f32 = 1.0 / (B*T) as f32;
         for i in 0..B*T {self.grads_acts.losses[i] = dloss_mean}
 
-        println!("backwards crossentropy firing");
         crossentropy_softmax_backward(v, vp, &mut self.grads_acts.logits, &self.grads_acts.losses, &self.acts.probs, &targets);
-        // crossentropy_softmax_backward(v, vp, &targets, &self.grads_acts.losses, &self.acts.probs,&mut self.grads_acts.logits);
-        println!("backwards matmul firing");
         matmul_backward(0, vp, c, &mut self.grads_acts.lnf, &mut self.grads.wte, None, &self.grads_acts.logits, &self.acts.lnf, &self.params.wte);
-        println!("layernorm backwards firing");
         lyrnrm_bwd(nl-1, 0, c, &mut self.grads_acts.residual3, &mut self.grads.lnfw, &mut self.grads.lnfb, &mut self.grads_acts.lnf, &self.acts.residual3, &self.params.lnfw, &self.acts.lnf_mean, &self.acts.lnf_rstd);
 
         for l in (0..nl).rev() {
             // backprop this layer
-            println!("res bwk");
             residual_backward(l, c, &mut self.grads_acts.residual2, &mut self.grads_acts.fcproj, &self.grads_acts.residual3);
-            println!("matmul backward in layer loop");
             matmul_backward(l, c, 4*c, &mut self.grads_acts.fch_gelu, &mut self.grads.fcprojw, Some(&mut self.grads.fcprojb), &self.grads_acts.fcproj, &self.acts.fch_gelu, &self.params.fcprojw);
-            println!("gelu backward in layer loop");
             gelu_backward(l, c, &mut self.grads_acts.fch, &mut self.acts.fch, &self.grads_acts.fch_gelu);
-            println!("2 matmul backward in layer loop");
             matmul_backward(l, 4*c, c, &mut self.grads_acts.ln2, &mut self.grads.fcw, Some(&mut self.grads.fcb), &self.grads_acts.fch, &self.acts.ln2, &mut self.params.fcw);
-            println!("layernorm backward in layer loop");
             lyrnrm_bwd(l, l, c, &mut self.grads_acts.residual2, &mut self.grads.ln2w, &mut self.grads.ln2b, &mut self.grads_acts.ln2, &self.acts.residual2, &self.params.ln2w, &self.acts.ln2_mean, &self.acts.ln2_rstd);
-            println!("residual backward in layer loop");
             residual_backward(l, c, &mut self.grads_acts.residual3, &mut self.grads_acts.attproj, &self.grads_acts.residual2);
-            println!("3 matmul backward in layer loop ");
             matmul_backward(l, c, c, &mut self.grads_acts.atty, &mut self.grads.attprojw, Some(&mut self.grads.attprojb), &self.grads_acts.attproj, &self.acts.atty, &self.params.attprojw);
-            println!("attention bwd in layer loop");
             attention_backward(l, c, nh, &mut self.grads_acts.qkv, &mut self.grads_acts.preatt, &mut self.grads_acts.att, &self.grads_acts.atty, &self.acts.qkv, &self.acts.att);
-            println!("4 matmul bwd in layer loop");
             matmul_backward(l, 3*c, c, &mut self.grads_acts.ln1, &mut self.grads.qkvw, Some(&mut self.grads.qkvb), &self.grads_acts.qkv, &self.acts.ln1, &self.params.qkvw);
-            println!("2 layernorm backward in layer loop");
             lyrnrm_bwd(l, l, c, &mut self.grads_acts.residual3, &mut self.grads.ln1w, &mut self.grads.ln1b, &mut self.grads_acts.ln1, &self.acts.residual3, &self.params.ln1w, &self.acts.ln1_mean, &self.acts.ln1_rstd);
-            println!("loop done");
         }
-        println!("encoder backward");
         // dout is residual[3] for code readability
         encoder_backward(c, &mut self.grads.wte, &mut self.grads.wpe, &self.grads_acts.residual3, &inputs);
-        println!("done");
     }
 
     pub fn zero_grad(&mut self) {

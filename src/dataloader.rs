@@ -86,9 +86,6 @@ impl DataLoader {
             ntok_total, 
             gl_pathc
         );
-        println!("DataLoader: process_rank: {}", process_rank);
-        println!("DataLoader: number of processes: {}", n_proc);
-        println!("current position {}", (HEADER_SIZE*16 + process_rank*B*T*16) as u64);
         
         return DataLoader {
             process_rank: process_rank,
@@ -131,8 +128,6 @@ impl DataLoader {
         let mut targets: Vec<u32> = vec![0u32; B*T];
 
         // read B*T+1 u16 tokens from the file into buffer
-        println!("next batch current shard: {}", self.current_shard);
-        println!("next batch current position: {}", self.current_position);
         let file: File = utils::fopen_check(&self.gl_pathv[self.current_shard]);
         let mut reader = BufReader::new(&file);
         reader.seek(SeekFrom::Start(self.current_position as u64)).unwrap();
@@ -149,9 +144,7 @@ impl DataLoader {
         }
         
         // decode the buffer into inputs and targets (cast to int)
-        println!("{}", self.inputs.len());
         for i in 0..B*T {
-            println!("Loading buffer: {}", self.buffer[i]);
             inputs[i] = self.buffer[i] as u32;
             targets[i] = self.buffer[i + 1] as u32;
         }

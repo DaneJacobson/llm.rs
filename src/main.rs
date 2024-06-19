@@ -42,7 +42,7 @@ fn main() {
             val_loader.reset();
             for val_batch in 0..val_num_batches {
                 let (inputs, targets) = val_loader.next_batch();
-                println!("Forward {} is running", val_batch);
+                println!("Forward batch {} is running", val_batch);
                 model.forward(true, &inputs, &targets);
                 val_loss += model.mean_loss;
             }
@@ -93,14 +93,10 @@ fn main() {
         // do a training step
         let start: Instant = Instant::now();
         let (train_inputs, train_targets) = train_loader.next_batch();
-        println!("firing forward");
         model.forward(true, &train_inputs, &train_targets);
-        println!("firing zero grad");
         model.zero_grad();
-        println!("firing backward");
         model.backward(&train_inputs, &train_targets);
         let step: usize = 0;
-        println!("firing update");
         model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
         let end: Instant = Instant::now();
         let duration: Duration = end.duration_since(start);
