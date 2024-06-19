@@ -24,7 +24,7 @@ pub const U8_BUFFER_SIZE: usize = 2 * BUFFER_SIZE;
 // ----------------------------------------------------------------------------
 
 pub struct Tokenizer {
-    vocab_size: usize,
+    pub vocab_size: usize,
     pub token_table: Vec<Vec<u8>>,
     pub init_ok: bool,
     pub eot_token: usize, // <|endoftext|> token id
@@ -73,6 +73,28 @@ impl Tokenizer {
             init_ok: true,
             eot_token: eot_token as usize,
         };
+    }
+
+    pub fn decode(&self, token_id: usize) -> Option<String> {
+        if self.init_ok == false {
+            return None;
+        }
+        if token_id < self.vocab_size {
+            // Convert Vec<u8> to String
+            let result = String::from_utf8(self.token_table[token_id].clone());
+            match result {
+                Ok(string) => {
+                    return Some(string);
+                },
+                Err(e) => {
+                    println!("Failed to convert: {:?}", e);
+                    exit(1);
+                }
+            }
+        } else {
+            println!("invalid token id {}!", token_id);
+            return None;
+        }
     }
 
 }

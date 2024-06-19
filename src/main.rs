@@ -2,7 +2,8 @@ use std::fmt;
 use std::fs::File;
 use std::process::exit;
 use std::iter::zip;
-// use std::time::Instant;
+use std::time::{Instant, Duration};
+use rand::Rng;
 
 pub mod utils;
 pub mod dataloader;
@@ -12,7 +13,7 @@ pub mod tokenizer;
 pub const B: usize = 4;
 pub const T: usize = 64;
 pub const VOCAB_SIZE: usize = 50257;
-pub const GENT: u32 = 64; // number of steps of inference we will do
+pub const GENT: usize = 64; // number of steps of inference we will do
 
 pub const HEADER_SIZE: usize = 256;
 pub const BUFFER_SIZE: usize = B*T+1;
@@ -347,9 +348,7 @@ impl GPT2 {
 
         // validate inputs, all indices must be in the range [0, V)
         for i in 0..B*T {
-            // assert!(0 <= inputs[i]);
             assert!(inputs[i] < (v as u32));
-            // assert!(0 <= targets[i]);
             assert!(targets[i] < (v as u32));
         }
 
@@ -581,6 +580,19 @@ impl GPT2 {
             }
         }
     }
+
+    pub fn sample_mult(&self, t: usize) -> usize {
+        let mut rng = rand::thread_rng();
+        let coin: f32 = rng.gen::<f32>();
+        let mut cdf: f32 = 0.0;
+        for i in 0..self.acts.probs.len() {
+            cdf += self.acts.probs[(t-1) * self.config.padded_vocab_size];
+            if coin < cdf {
+                return i;
+            }
+        }
+        return self.acts.probs.len() - 1; // in case of rounding errors
+    }
 }
 
 impl fmt::Display for GPT2 {
@@ -615,66 +627,66 @@ fn main() {
     println!("{}", tokenizer);
 
     // some memory for generating samples from the model
-    // let rng_state: u64 = 1337;
-    // let gen_tokens: [u32; B*T*16] = [0u32; B*T*16];
+    let mut gen_tokens: Vec<u32> = vec![0u32; B*T*16];
 
     // train
-    // let time_instant: Instant = Instant::now();
-    // for step in 0..41 {
-    //     // once in a while estimate the validation loss
-    //     if step % 10 == 0 {
-    //         let mut val_loss: f32 = 0.0;
-    //         val_loader.reset();
-    //         for val_batch in 0..val_num_batches {
-    //             let (inputs, targets) = val_loader.next_batch();
-    //             println!("Forward {} is running", val_batch);
-    //             model.forward(true, &inputs, &targets);
-    //             val_loss += model.mean_loss;
-    //         }
-    //         val_loss /= val_num_batches as f32;
-    //         println!("val loss {}\n", val_loss);
-    //     }
-    // }
+    for step in 0..41 {
+        // once in a while estimate the validation loss
+        if step % 10 == 0 {
+            let mut val_loss: f32 = 0.0;
+            val_loader.reset();
+            for val_batch in 0..val_num_batches {
+                let (inputs, targets) = val_loader.next_batch();
+                println!("Forward {} is running", val_batch);
+                model.forward(true, &inputs, &targets);
+                val_loss += model.mean_loss;
+            }
+            val_loss /= val_num_batches as f32;
+            println!("val loss {}\n", val_loss);
+        }
 
-        // // once in a while do model inference to print generated text
-        // if (step > 0) && (step % 20 == 0) {
-        //     // fill up gen_tokens with the GPT2_EOT, which kicks off the generation
-        //     for i in 0..B*T {
-        //         gen_tokens[i] = tokenizer.eot_token;
-        //     }
-        //     // now sample from the model autoregressively
-        //     println!("generating:\n---\n");
-        //     for t in 0..GENT {
-        //         // note that inference is very wasteful here because for each token
-        //         // we re-calculate the forward pass for all of (B,T) positions from scratch
-        //         // but the inference here is just for sanity checking anyway
-        //         // and we can maybe optimize a bit more later, with careful tests
-        //         model.forward(gen_tokens, None, B, T);
-        //         // furthermore, below we're only using b=0 (i.e. the first row) of all B rows
-        //         // we're in principle running B "inference streams" in parallel here
-        //         // but only using position 0
-        //         // get the Vp-dimensional vector probs[0, t-1, :]
-        //         let probs: Vec<f32> = model.self.acts.probs + (t-1) * model.config.padded_vocab_size;
-        //         let coin: f32 = random_f32(&rng_state);
-        //         // note we're only sampling from the first V elements, ignoring padding
-        //         // (the probabilities in the padded region should be zero anyway)
-        //         let next_token: usize = sample_mult(probs, model.config.vocab_size, coin);
-        //         gen_tokens[t] = next_token;
-        //         // print the generated token, either using the Tokenizer or a fallback
-        //         if tokenizer.init_ok {
-        //             let token_str: String = tokenizer.decode(next_token);
-        //             println!("{}", token_str);
-        //         } else {
-        //             // fall back to printing the token id
-        //             println!("{}", next_token);
-        //         }
-        //         fflush(stdout);
-        //     }
-        //     println!("\n---\n");
-        // }
+        // once in a while do model inference to print generated text
+        if (step > 0) && (step % 20 == 0) {
+            // fill up gen_tokens with the GPT2_EOT, which kicks off the generation
+            for i in 0..B*T {
+                gen_tokens[i] = tokenizer.eot_token as u32;
+            }
+            // now sample from the model autoregressively
+            println!("generating:\n---\n");
+            for t in 0..GENT {
+                // note that inference is very wasteful here because for each token
+                // we re-calculate the forward pass for all of (B,T) positions from scratch
+                // but the inference here is just for sanity checking anyway
+                // and we can maybe optimize a bit more later, with careful tests
+                model.forward(false, &gen_tokens, &vec![0u32; BUFFER_SIZE]);
+                // furthermore, below we're only using b=0 (i.e. the first row) of all B rows
+                // we're in principle running B "inference streams" in parallel here
+                // but only using position 0
+                // get the Vp-dimensional vector probs[0, t-1, :]
+
+                // note we're only sampling from the first V elements, ignoring padding
+                // (the probabilities in the padded region should be zero anyway)
+                let next_token: usize = model.sample_mult(t);
+                gen_tokens[t] = next_token as u32;
+                // print the generated token, either using the Tokenizer or a fallback
+                if tokenizer.init_ok {
+                    // Decode the token using the tokenizer
+                    if let Some(decoded_str) = tokenizer.decode(next_token) {
+                        println!("{}", decoded_str);
+                    } else {
+                        // Handle the case where no token could be decoded
+                        println!("Error decoding token or token not found");
+                    }
+                } else {
+                    // fall back to printing the token id
+                    println!("{}", next_token);
+                }
+            }
+            println!("\n---\n");
+        }
 
         // do a training step
-        // let start_time = time_instant.elapsed().as_secs();
+        let start: Instant = Instant::now();
         let (train_inputs, train_targets) = train_loader.next_batch();
         println!("firing forward");
         model.forward(true, &train_inputs, &train_targets);
@@ -685,10 +697,11 @@ fn main() {
         let step: usize = 0;
         println!("firing update");
         model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
-        // let end_time = time_instant.now.elapsed().as_secs();
-        // // TODO: wait what the fuck is happening in this line
-        // let time_elapsed_s: f32 = (end_time.now() - start_time.now()) + (end.tv_nsec - start.tv_nsec) / 1e9;
-        // println!("step %d: train loss %f (took %f ms)\n", step, model.mean_loss, time_elapsed_s * 1000);
+        let end: Instant = Instant::now();
+        let duration: Duration = end.duration_since(start);
+        let time_elapsed_s = duration.as_secs() as f64 + duration.subsec_nanos() as f64 * 1e-9;
+        println!("step {}: train loss {} (took {} ms)\n", step, model.mean_loss, time_elapsed_s * 1000.0);
+    }
 }
 
 // ----------------------- //
