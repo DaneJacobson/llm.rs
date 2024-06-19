@@ -4,16 +4,10 @@ use std::process::exit;
 
 use glob::glob;
 
+use crate::constants::{B, T, BUFFER_SIZE, HEADER_SIZE};
 use crate::utils;
 
-pub const B: usize = 4;
-pub const T: usize = 64;
-pub const VOCAB_SIZE: usize = 50257;
-pub const GENT: u32 = 64; // number of steps of inference we will do
-
-pub const HEADER_SIZE: usize = 256;
-pub const BUFFER_SIZE: usize = B*T+1;
-pub const U8_BUFFER_SIZE: usize = 2 * BUFFER_SIZE;
+// -----------------------------------------------------------------------------
 
 pub struct DataLoader {
     // variables related to distributed training

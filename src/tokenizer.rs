@@ -9,19 +9,10 @@ use std::fmt;
 use std::io::Read;
 use std::process::exit;
 
+use crate::constants::VOCAB_SIZE;
 use crate::utils;
 
-pub const B: usize = 4;
-pub const T: usize = 64;
-pub const VOCAB_SIZE: usize = 50257;
-pub const GENT: u32 = 64; // number of steps of inference we will do
-
-pub const HEADER_SIZE: usize = 256;
-pub const BUFFER_SIZE: usize = B*T+1;
-pub const U8_BUFFER_SIZE: usize = 2 * BUFFER_SIZE;
-
-
-// ----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 pub struct Tokenizer {
     pub vocab_size: usize,
@@ -110,43 +101,3 @@ impl fmt::Display for Tokenizer {
         )
     }
 }
-
-
-// void safe_printf(const char *piece) {
-//     // the tokens are raw bytes, and we we only want to print the printable ones
-//     // many bytes can be various control codes, backspace, etc.
-//     if (piece == NULL) { return; }
-//     if (piece[0] == '\0') { return; }
-//     // handle individual byte tokens
-//     // every token is asserted to be at least one byte so doing piece[1] is ok
-//     if (piece[1] == '\0') {
-//         unsigned char byte_val = piece[0];
-//         if (!(isprint(byte_val) || isspace(byte_val))) {
-//             return; // weird byte, don't print it
-//         }
-//     }
-//     printf("%s", piece);
-// }
-
-
-
-// const char *tokenizer_decode(Tokenizer *tokenizer, uint32_t token_id) {
-//     if (tokenizer->init_ok == 0) {
-//         return NULL;
-//     }
-//     if (token_id < tokenizer->vocab_size) {
-//         return tokenizer->token_table[token_id];
-//     } else {
-//         printf("invalid token id %d!\n", token_id);
-//         return NULL;
-//     }
-// }
-
-// void tokenizer_free(Tokenizer *tokenizer) {
-//     if (tokenizer->init_ok) {
-//         for (uint32_t i = 0; i < tokenizer->vocab_size; i++) {
-//             free(tokenizer->token_table[i]);
-//         }
-//         free(tokenizer->token_table);
-//     }
-// }
