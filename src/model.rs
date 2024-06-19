@@ -259,7 +259,7 @@ impl GPT2 {
     }
 
     pub fn sample_mult(&self, t: usize) -> usize {
-        let mut rng = rand::thread_rng();
+        let mut rng: rand::prelude::ThreadRng = rand::thread_rng();
         let coin: f32 = rng.gen::<f32>();
         let mut cdf: f32 = 0.0;
         for i in 0..self.acts.probs.len() {
@@ -331,7 +331,6 @@ fn lyrnrm_fwd(
     let eps: f32 = 1.0e-5;
     for b in 0..B {
         for t in 0..T {
-            // let lb: usize = l*(B*T*c) + b*(T*c);
             let ilbt: usize = il*(B*T*c) + b*(T*c) + t*(c);
 
             // calculate the mean
@@ -428,24 +427,25 @@ fn matmul_fwd(
     //         let mut result: Vec<f32> = Vec::new(LOOP_UNROLL);
     //         // initialize the bias, if it exists
     //         for ibt in 0..LOOP_UNROLL {
-    //             result[ibt] = (bias != None) ? bias[o] : 0.0;
+    //             result[ibt] = if bias != None {bias[o]} else {0.0};
     //         }
     //         // inner loops. Because we do LOOP_UNROLL steps of inner bt, we can cache
     //         // the value of weight[i + o * C] and reuse it.
     //         // we compile with -Ofast, so the compiler will turn the inner loop into FMAs
     //         for i in 0..c {
-    //             float w = weight[i + o * C];
-    //             for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
-    //                 int bt = obt + ibt;
-    //                 result[ibt] += inp[bt * C + i] * w;
+    //             let w: f32 = weight[i + o*c];
+    //             for ibt in 0..LOOP_UNROLL {
+    //                 let bt: usize = obt + ibt;
+    //                 result[ibt] += inp[bt * c + i] * w;
     //             }
     //         }
     //         // write back results to main memory
-    //         for (int ibt = 0; ibt < LOOP_UNROLL; ibt++) {
-    //             int bt = obt + ibt;
-    //             out[bt * OC + o] = result[ibt];
+    //         for ibt in 0..LOOP_UNROLL {
+    //             let bt: usize = obt + ibt;
+    //             out[bt * oc + o] = result[ibt];
     //         }
     //     }
+    // }
 }
 
 fn attent_fwd(
@@ -610,7 +610,6 @@ fn crossentropy_fwd(
     // input: targets is (B,T) of integers giving the correct index in logits
     for b in 0..B {
         for t in 0..T {
-            // loss = -log(probs[target])
             let probs_bt: usize = b*(T*vp) + t*(vp);
             let ix: usize = targets[b*(T) + t] as usize;
             losses[b*(T) + t] = -1.0 * (probs[probs_bt+ix]).ln();
@@ -728,12 +727,12 @@ fn gelu_backward(
     let skip: usize = l*(B*T*4*c);
     for i in 0..(B*T*4*c) {
         let x: f32 = inp[skip+i];
-        let cube: f32 = 0.044715 * x * x * x;
-        let tanh_arg: f32 = GELU_SCALING_FACTOR * (x + cube);
+        let cube: f32 = 0.044715*x*x*x;
+        let tanh_arg: f32 = GELU_SCALING_FACTOR*(x + cube);
         let tanh_out: f32 = tanh_arg.tanh();
         let coshf_out: f32 = tanh_arg.cosh();
-        let sech_out: f32 = 1.0 / (coshf_out * coshf_out);
-        let local_grad: f32 = 0.5 * (1.0 + tanh_out) + x * 0.5 * sech_out * GELU_SCALING_FACTOR * (1.0 + 3.0 * 0.044715 * x * x);
+        let sech_out: f32 = 1.0 / (coshf_out*coshf_out);
+        let local_grad: f32 = 0.5*(1.0 + tanh_out) + x*0.5*sech_out*GELU_SCALING_FACTOR*(1.0 + 3.0*0.044715*x*x);
         dinp[i] += local_grad * dout[i];
     }
 }

@@ -1,3 +1,7 @@
+/* 
+Constants used across all GPT-2 instances 
+*/
+
 pub const B: usize = 4;
 pub const T: usize = 64;
 pub const VOCAB_SIZE: usize = 50257;

@@ -6,7 +6,9 @@ If we wanted to later prompt the model, we'd have to add decoding.
 Which could be tricky in C because of the regex involved, to look into later.
 */
 use std::fmt;
+use std::fs::File;
 use std::io::Read;
+use std::string::FromUtf8Error;
 use std::process::exit;
 
 use crate::constants::VOCAB_SIZE;
@@ -23,7 +25,7 @@ pub struct Tokenizer {
 
 impl Tokenizer {
     pub fn new(filename: &str) -> Tokenizer {
-        let mut file = utils::fopen_check(&filename);
+        let mut file: File = utils::fopen_check(&filename);
 
         // Read in and validate header
         let header: [u32; 256] = utils::read_header(&mut file);
@@ -72,7 +74,9 @@ impl Tokenizer {
         }
         if token_id < self.vocab_size {
             // Convert Vec<u8> to String
-            let result = String::from_utf8(self.token_table[token_id].clone());
+            let result: Result<String, FromUtf8Error> = String::from_utf8(
+                self.token_table[token_id].clone()
+            );
             match result {
                 Ok(string) => {
                     return Some(string);
@@ -92,12 +96,6 @@ impl Tokenizer {
 
 impl fmt::Display for Tokenizer {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f, 
-            "Tokenizer: {} {} {}", 
-            self.vocab_size,
-            self.init_ok,
-            self.eot_token,
-        )
+        write!( f,  "Tokenizer: {} {} {}",  self.vocab_size, self.init_ok, self.eot_token)
     }
 }

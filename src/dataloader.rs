@@ -17,11 +17,8 @@ pub struct DataLoader {
     // input handling and its state
     gl_pathc: usize, // count of pattern-matched paths
     gl_pathv: Vec<String>, // vector list of matched paths of length gl_pathc
-    // gl_offs: u32, // number of empty pointers in gl_pathv for convenience
     current_shard: usize, // the current shard we are reading from
     current_position: u64, // the current position in the file we are reading from
-    // file_size: u64,
-    // current_position: u64,
     buffer: [u16; BUFFER_SIZE], // we fread data from file into this buffer
     // public variables that could be accessed from outside
     pub num_tokens: usize, // total number of tokens
@@ -129,9 +126,9 @@ impl DataLoader {
 
         // read B*T+1 u16 tokens from the file into buffer
         let file: File = utils::fopen_check(&self.gl_pathv[self.current_shard]);
-        let mut reader = BufReader::new(&file);
+        let mut reader: BufReader<&File> = BufReader::new(&file);
         reader.seek(SeekFrom::Start(self.current_position as u64)).unwrap();
-        let mut temp_buf = [0u8; 2 * BUFFER_SIZE];
+        let mut temp_buf: [u8; 514] = [0u8; 2 * BUFFER_SIZE];
         reader.read_exact(&mut temp_buf).unwrap();
 
         // Convert byte intelligences to u16 array of size 256
@@ -140,7 +137,6 @@ impl DataLoader {
             let mut bytes: [u8; 2] = [0u8; 2];
             cursor.read_exact(&mut bytes).unwrap();
             *value = u16::from_ne_bytes(bytes);
-            // println!("*Value: {}", value);
         }
         
         // decode the buffer into inputs and targets (cast to int)
@@ -154,7 +150,7 @@ impl DataLoader {
         // we only load B * T + 1 tokens at each iteration because the targets are offset by 1
         self.current_position += ((self.n_proc*B*T)*16) as u64;
         // if the next batch would go past the end of the file, advance the loader
-        let file_size = file.metadata().unwrap().len();
+        let file_size: u64 = file.metadata().unwrap().len();
         if self.current_position + ((self.n_proc*B*T+1)*16) as u64 > file_size {
             self.advance();
         }

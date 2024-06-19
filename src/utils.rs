@@ -30,7 +30,6 @@ pub fn fopen_check(path: &str) -> File {
             println!("{}  File: {}\n", error, file);
             println!("{}  Line: {}\n", error, line);
             println!("{}  Path: {}\n", error, path);
-            // TODO: Note to self, I removed mode error statement bc I didn't think it would be necessary
             println!("{}---> HINT 1: dataset files/code have moved to dev/data recently (May 20, 2024). You may have to mv them from the legacy data/ dir to dev/data/(dataset), or re-run the data preprocessing script. Refer back to the main README\n", error);
             println!("{}---> HINT 2: possibly try to re-run `python train_gpt2.py`\n", error);
             exit(1);

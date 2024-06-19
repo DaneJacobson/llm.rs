@@ -132,25 +132,31 @@ impl fmt::Display for ParameterTensors {
 
 // B=batch size, T=tokens, C=embed dim, L=layers
 pub struct ActivationTensors {
+    // first layer norm
     pub ln1: Vec<f32>, // (L, B, T, C)
     pub ln1_mean: Vec<f32>, // (L, B, T)
     pub ln1_rstd: Vec<f32>, // (L, B, T)
+    // attention
     pub qkv: Vec<f32>, // (L, B, T, 3*C)
     pub atty: Vec<f32>, // (L, B, T, C)
     pub preatt: Vec<f32>, // (L, B, NH, T, T)
     pub att: Vec<f32>, // (L, B, NH, T, T)
     pub attproj: Vec<f32>, // (L, B, T, C)
     pub residual2: Vec<f32>, // (L, B, T, C)
+    // second layer norm
     pub ln2: Vec<f32>, // (L, B, T, C)
     pub ln2_mean: Vec<f32>, // (L, B, T)
     pub ln2_rstd: Vec<f32>, // (L, B, T)
+    // MLP
     pub fch: Vec<f32>, // (L, B, T, 4*C)
     pub fch_gelu: Vec<f32>, // (L, B, T, 4*C)
     pub fcproj: Vec<f32>, // (L, B, T, C)
     pub residual3: Vec<f32>, // (L, B, T, C)
+    // final linear layer
     pub lnf: Vec<f32>, // (B, T, C)
     pub lnf_mean: Vec<f32>, // (B, T)
     pub lnf_rstd: Vec<f32>, // (B, T)
+    // drop to token space
     pub logits: Vec<f32>, // (B, T, Vp)
     pub probs: Vec<f32>, // (B, T, Vp)
     pub losses: Vec<f32>, // (B, T)
@@ -164,7 +170,6 @@ impl ActivationTensors {
         let vp: usize = config.padded_vocab_size;
         
         return ActivationTensors {
-            // encoded: vec![0f32; B*T*c],
             ln1: vec![0f32; l*B*T*c],
             ln1_mean: vec![0f32; l*B*T],
             ln1_rstd: vec![0f32; l*B*T],

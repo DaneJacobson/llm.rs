@@ -8,6 +8,8 @@ mod tokenizer;
 mod utils;
 
 use constants::{B, T, GENT, BUFFER_SIZE};
+use dataloader::DataLoader;
+use tokenizer::Tokenizer;
 
 // -----------------------------------------------------------------------------
 
@@ -20,15 +22,15 @@ fn main() {
     // build the DataLoaders from tokens files. For now use tiny_shakespeare if available
     let tiny_shakespeare_train: String = String::from("data/tinyshakespeare/tiny_shakespeare_train.bin");
     let tiny_shakespeare_val: String = String::from("data/tinyshakespeare/tiny_shakespeare_val.bin");
-    let mut train_loader = dataloader::DataLoader::new(&tiny_shakespeare_train, 0, 1);
-    let mut val_loader = dataloader::DataLoader::new(&tiny_shakespeare_val, 0, 1);
+    let mut train_loader: DataLoader = DataLoader::new(&tiny_shakespeare_train, 0, 1);
+    let mut val_loader: DataLoader = DataLoader::new(&tiny_shakespeare_val, 0, 1);
     println!("train dataset num_batches: {}", train_loader.num_tokens / (B*T));
     println!("val dataset num_batches: {}\n", val_loader.num_tokens / (B*T));
     let val_num_batches: usize = 5;
 
     // build the Tokenizer
     let tokenizer_path: String = String::from("data/tokenizer/gpt2_tokenizer.bin");
-    let tokenizer: tokenizer::Tokenizer = tokenizer::Tokenizer::new(&tokenizer_path);
+    let tokenizer: Tokenizer = Tokenizer::new(&tokenizer_path);
     println!("{}", tokenizer);
 
     // some memory for generating samples from the model
@@ -100,7 +102,7 @@ fn main() {
         model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step+1);
         let end: Instant = Instant::now();
         let duration: Duration = end.duration_since(start);
-        let time_elapsed_s = duration.as_secs() as f64 + duration.subsec_nanos() as f64 * 1e-9;
+        let time_elapsed_s: f64 = duration.as_secs() as f64 + duration.subsec_nanos() as f64 * 1e-9;
         println!("step {}: train loss {} (took {} ms)\n", step, model.mean_loss, time_elapsed_s * 1000.0);
     }
 }
